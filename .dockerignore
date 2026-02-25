@@ -1,0 +1,13 @@
+.data/
+.models/
+.venv/
+.git/
+.github/
+.claude/
+.vscode/
+mlruns/
+mlflow.db
+notebooks/
+__pycache__/
+*.pyc
+*.egg-info/

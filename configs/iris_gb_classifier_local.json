@@ -1,0 +1,25 @@
+{
+    "seed": 42,
+    "data": {
+        "path": ".data/iris/iris.csv",
+        "target_column": "species",
+        "test_size": 0.2
+    },
+    "preprocessing": {
+        "scaling": "min-max",
+        "output_path": ".data/iris/iris_processed.csv"
+    },
+    "model": {
+        "name": "gb_classifier",
+        "params": {
+            "n_estimators": 100,
+            "max_depth": 3
+        }
+    },
+    "training": {
+        "experiment_name": "iris-gb-classifier",
+        "run_name": null,
+        "model_path": ".models/iris_gb_classifier",
+        "tracking": false
+    }
+}

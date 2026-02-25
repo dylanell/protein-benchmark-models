@@ -1,0 +1,34 @@
+services:
+  minio:
+    image: minio/minio
+    ports:
+      - "7000:7000"
+      - "7001:7001"
+    volumes:
+      - minio-data:/data
+    command: server /data --address ":7000" --console-address ":7001"
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:7000
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    command: >
+      bash -c "pip install boto3 -q &&
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root s3://mlflow/
+      --allowed-hosts host.docker.internal:5000,127.0.0.1:5000,localhost:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    depends_on:
+      - minio
+
+volumes:
+  minio-data:
+  mlflow-data:

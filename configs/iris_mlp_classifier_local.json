@@ -1,0 +1,35 @@
+{
+    "seed": 42,
+    "data": {
+        "path": ".data/iris/iris.csv",
+        "target_column": "species",
+        "test_size": 0.2
+    },
+    "preprocessing": {
+        "scaling": "standardize",
+        "output_path": ".data/iris/iris_processed.csv"
+    },
+    "model": {
+        "name": "mlp_classifier",
+        "params": {
+            "layer_dims": [4, 16, 3],
+            "hidden_activation": "LeakyReLU",
+            "output_activation": "Identity",
+            "use_bias": true,
+            "norm": "layer"
+        }
+    },
+    "training": {
+        "experiment_name": "iris-mlp-classifier",
+        "run_name": null,
+        "model_path": ".models/iris_mlp_classifier",
+        "lr": 1e-3,
+        "weight_decay": 0.01,
+        "max_epochs": 1000,
+        "batch_size": 8,
+        "val_frequency": 1,
+        "patience": 10,
+        "save_model": "best",
+        "tracking": false
+    }
+}
