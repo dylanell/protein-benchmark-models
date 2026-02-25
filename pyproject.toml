@@ -1,5 +1,5 @@
 [project]
-name = "ml-project-template"
+name = "protein-benchmark-models"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ml-project-template = "ml_project_template:main"
+protein-benchmark-models = "protein_benchmark_models:main"
 
 [dependency-groups]
 dev = ["httpx>=0.27", "pytest>=8.0"]

@@ -14,9 +14,9 @@ from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from ml_project_template.data import TabularDataset
-from ml_project_template.models.base import BaseModel
-from ml_project_template.modules.fully_connected import FullyConnected
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.models.base import BaseModel
+from protein_benchmark_models.modules.fully_connected import FullyConnected
 
 
 class MLPClassifier(BaseModel):

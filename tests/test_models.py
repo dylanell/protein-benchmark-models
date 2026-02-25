@@ -15,8 +15,8 @@ import tempfile
 
 import numpy as np
 
-from ml_project_template.models.mlp_classifier import MLPClassifier
-from ml_project_template.models.gb_classifier import GBClassifier
+from protein_benchmark_models.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.gb_classifier import GBClassifier
 
 
 class TestMLPClassifier:

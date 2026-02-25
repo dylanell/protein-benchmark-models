@@ -12,9 +12,9 @@ import tempfile
 import numpy as np
 import pytest
 
-from ml_project_template.models import ModelRegistry
-from ml_project_template.models.gb_classifier import GBClassifier
-from ml_project_template.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models import ModelRegistry
+from protein_benchmark_models.models.gb_classifier import GBClassifier
+from protein_benchmark_models.models.mlp_classifier import MLPClassifier
 
 
 def test_list():

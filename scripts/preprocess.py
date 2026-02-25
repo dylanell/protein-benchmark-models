@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
-from ml_project_template.utils import get_storage_options, seed_everything
+from protein_benchmark_models.utils import get_storage_options, seed_everything
 
 load_dotenv()
 

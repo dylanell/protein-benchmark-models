@@ -14,9 +14,9 @@ import sys
 
 from dotenv import load_dotenv
 
-from ml_project_template.data import TabularDataset
-from ml_project_template.models import ModelRegistry
-from ml_project_template.utils import get_storage_options, seed_everything
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.models import ModelRegistry
+from protein_benchmark_models.utils import get_storage_options, seed_everything
 
 load_dotenv()
 

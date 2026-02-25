@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ml_project_template.utils import get_s3_filesystem
+from protein_benchmark_models.utils import get_s3_filesystem
 
 load_dotenv()
 

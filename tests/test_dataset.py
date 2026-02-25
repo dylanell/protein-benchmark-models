@@ -12,7 +12,7 @@ import tempfile
 
 import torch
 
-from ml_project_template.data import TabularDataset
+from protein_benchmark_models.data import TabularDataset
 
 
 def test_split(iris_tiny):

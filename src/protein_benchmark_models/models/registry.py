@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 
-from ml_project_template.models.base import BaseModel
-from ml_project_template.models.gb_classifier import GBClassifier
-from ml_project_template.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.base import BaseModel
+from protein_benchmark_models.models.gb_classifier import GBClassifier
+from protein_benchmark_models.models.mlp_classifier import MLPClassifier
 
 
 class ModelRegistry:

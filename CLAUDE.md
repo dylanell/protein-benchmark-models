@@ -110,8 +110,8 @@ notebooks/                   # R&D notebooks
 
 ### Data Loading
 ```python
-from ml_project_template.data import TabularDataset
-from ml_project_template.utils import get_storage_options
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.utils import get_storage_options
 
 dataset = TabularDataset.from_csv("s3://data/iris/iris.csv", target_column="species", storage_options=get_storage_options("s3://data/iris/iris.csv"))
 train_data, test_data = dataset.split(test_size=0.2, random_state=42)
@@ -119,7 +119,7 @@ train_data, test_data = dataset.split(test_size=0.2, random_state=42)
 
 ### Model Registry
 ```python
-from ml_project_template.models import ModelRegistry
+from protein_benchmark_models.models import ModelRegistry
 ModelRegistry.list()  # ['gb_classifier', 'mlp_classifier']
 model = ModelRegistry.get("mlp_classifier")(layer_dims=[4, 16, 3])
 

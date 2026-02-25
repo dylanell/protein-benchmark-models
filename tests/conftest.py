@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ml_project_template.data import TabularDataset
+from protein_benchmark_models.data import TabularDataset
 
 
 @pytest.fixture

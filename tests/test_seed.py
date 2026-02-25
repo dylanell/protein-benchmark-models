@@ -3,8 +3,8 @@
 import numpy as np
 import torch
 
-from ml_project_template.utils import seed_everything
-from ml_project_template.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.utils import seed_everything
+from protein_benchmark_models.models.mlp_classifier import MLPClassifier
 
 
 class TestSeedEverything:

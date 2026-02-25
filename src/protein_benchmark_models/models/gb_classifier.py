@@ -8,8 +8,8 @@ import joblib
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier as _GradientBoostingClassifier
 
-from ml_project_template.data import TabularDataset
-from ml_project_template.models.base import BaseModel
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.models.base import BaseModel
 
 
 class GBClassifier(BaseModel):

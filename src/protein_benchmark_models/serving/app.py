@@ -7,9 +7,9 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel as PydanticBaseModel
 
-from ml_project_template.data import TabularDataset
-from ml_project_template.models import ModelRegistry
-from ml_project_template.utils import get_storage_options
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.models import ModelRegistry
+from protein_benchmark_models.utils import get_storage_options
 
 
 class PredictRequest(PydanticBaseModel):
@@ -44,7 +44,7 @@ def create_app(config: dict, feature_names: list[str] | None = None, class_names
     model_path = config["training"]["model_path"]
 
     if model_path.startswith("s3://"):
-        from ml_project_template.utils import get_s3_filesystem
+        from protein_benchmark_models.utils import get_s3_filesystem
         fs = get_s3_filesystem()
 
         tmp_dir = tempfile.mkdtemp()
