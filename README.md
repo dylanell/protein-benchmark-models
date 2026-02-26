@@ -311,6 +311,45 @@ To update configs after changing them locally:
 kubectl create configmap training-configs --namespace argo --from-file=configs/ --dry-run=client -o yaml | kubectl apply -f -
 ```
 
+## Datasets
+
+### Onboarding
+
+Download a dataset to `.data/<task>/` (local) or an S3 prefix:
+
+```bash
+uv run python scripts/onboard.py --task fluorescence
+uv run python scripts/onboard.py --task stability
+uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
+```
+
+Each task produces `train.csv`, `valid.csv`, and `test.csv` with a consistent schema:
+
+| column | type | tasks |
+|---|---|---|
+| `sequence` | str | all |
+| `target` | float | all |
+| `num_mutations` | int | fluorescence only |
+
+### TAPE — Fluorescence
+
+- **Source:** Sarkisyan et al. 2016 (GFP), via [TAPE](https://github.com/songlab-gpu/tape)
+- **Task:** Predict log-fluorescence from amino acid sequence
+- **Splits:** train 21,446 / valid 5,362 / test 27,217
+
+Most sequences are 237 AA (wild-type GFP length). A small fraction are shorter:
+477 sequences are 236 AA and 71 are 235 AA (total ~2.4% of data). These arise from
+deletions introduced during error-prone PCR mutagenesis. The `num_mutations` field
+counts **all** edit-distance differences from wild-type — substitutions and deletions
+alike — so a 236 AA sequence with `num_mutations=1` has exactly one deletion and no
+substitutions. Filter on `seq_len == 237` if you want substitution-only variants.
+
+### TAPE — Stability
+
+- **Source:** Rocklin et al. 2017 (de novo proteins), via [TAPE](https://github.com/songlab-gpu/tape)
+- **Task:** Predict thermodynamic stability score from amino acid sequence
+- **Splits:** train 53,614 / valid 2,512 / test 12,851
+
 ## Testing
 
 Run the test suite with:

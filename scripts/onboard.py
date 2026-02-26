@@ -1,50 +1,128 @@
-"""Download the Iris dataset to a local directory or S3 prefix.
+"""Download protein benchmark datasets to a local directory or S3 prefix.
 
 Usage:
-    uv run python scripts/onboard.py
-    uv run python scripts/onboard.py --dest s3://data/iris/
+    uv run python scripts/onboard.py --task fluorescence
+    uv run python scripts/onboard.py --task stability
+    uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
 """
 
 import argparse
+import io
+import json
+import tarfile
 import urllib.request
 from pathlib import Path
 
+import pandas as pd
 from dotenv import load_dotenv
 
 from protein_benchmark_models.utils import get_s3_filesystem
 
 load_dotenv()
 
-DATA_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/iris/iris.data"
-COLUMN_NAMES = ["sepal_length", "sepal_width", "petal_length", "petal_width", "species"]
-FILENAME = "iris.csv"
+TAPE_BASE = "http://s3.amazonaws.com/songlabdata/proteindata/data_raw_pytorch"
+
+TASKS = {
+    "fluorescence": {
+        "url": f"{TAPE_BASE}/fluorescence.tar.gz",
+        "target_field": "log_fluorescence",
+        "extra_fields": ["num_mutations"],
+    },
+    "stability": {
+        "url": f"{TAPE_BASE}/stability.tar.gz",
+        "target_field": "stability_score",
+        "extra_fields": [],
+    },
+}
+
+SPLITS = ["train", "valid", "test"]
+
+
+def parse_tape_json(data: bytes, target_field: str, extra_fields: list) -> pd.DataFrame:
+    """Parse a TAPE JSON file (array of records) into a DataFrame.
+
+    Maps `primary` → `sequence` and `{target_field}` → `target`.
+    Handles targets stored as a [float] list or plain scalar.
+    Includes any extra_fields that exist in the record.
+    """
+    records = json.loads(data.decode("utf-8"))
+    rows = []
+    for record in records:
+        target = record[target_field]
+        if isinstance(target, list):
+            target = target[0]
+        row = {"sequence": record["primary"], "target": float(target)}
+        for field in extra_fields:
+            if field in record:
+                row[field] = record[field]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def find_tar_member(tar: tarfile.TarFile, task_name: str, split: str) -> tarfile.ExFileObject:
+    """Return the file object for *_{split}.json inside the tarball."""
+    suffix = f"_{split}.json"
+    for member in tar.getmembers():
+        if member.name.endswith(suffix):
+            f = tar.extractfile(member)
+            if f is not None:
+                return f
+    raise FileNotFoundError(
+        f"No member matching '*{suffix}' found in {task_name} tarball. "
+        f"Available: {[m.name for m in tar.getmembers()]}"
+    )
+
+
+def write_df(df: pd.DataFrame, path: str) -> None:
+    """Write DataFrame as CSV to a local path or S3 path."""
+    if path.startswith("s3://"):
+        fs = get_s3_filesystem()
+        with fs.open(path, "w") as fp:
+            fp.write(df.to_csv(index=False))
+    else:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, index=False)
+
+
+def onboard_tape_task(task_name: str, dest: str) -> None:
+    """Download and extract a TAPE task, writing one CSV per split."""
+    task = TASKS[task_name]
+    url = task["url"]
+    target_field = task["target_field"]
+    extra_fields = task["extra_fields"]
+
+    print(f"Downloading {task_name} from {url} ...")
+    with urllib.request.urlopen(url) as response:
+        tar_bytes = response.read()
+    print(f"Downloaded {len(tar_bytes) / 1_000_000:.1f} MB")
+
+    dest = dest.rstrip("/")
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+        for split in SPLITS:
+            f = find_tar_member(tar, task_name, split)
+            df = parse_tape_json(f.read(), target_field, extra_fields)
+            out_path = f"{dest}/{split}.csv"
+            write_df(df, out_path)
+            print(f"Saved {split}.csv ({len(df):,} rows) → {out_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download the Iris dataset.")
-    parser.add_argument("--dest", default=".data/iris", help="Destination directory (local or s3://)")
+    parser = argparse.ArgumentParser(description="Download protein benchmark datasets.")
+    parser.add_argument(
+        "--task",
+        required=True,
+        choices=list(TASKS.keys()),
+        help="Task to download",
+    )
+    parser.add_argument(
+        "--dest",
+        default=None,
+        help="Destination directory (local or s3://). Defaults to .data/<task>/",
+    )
     args = parser.parse_args()
 
-    # Download raw data
-    print(f"Downloading from '{DATA_URL}'")
-    response = urllib.request.urlopen(DATA_URL)
-    raw_data = response.read().decode("utf-8").strip()
-    csv_content = ",".join(COLUMN_NAMES) + "\n" + raw_data + "\n"
-
-    # Write to destination
-    dest = args.dest.rstrip("/")
-    file_path = f"{dest}/{FILENAME}"
-
-    if dest.startswith("s3://"):
-        fs = get_s3_filesystem()
-        with fs.open(file_path, "w") as fp:
-            fp.write(csv_content)
-    else:
-        Path(dest).mkdir(parents=True, exist_ok=True)
-        with open(file_path, "w") as fp:
-            fp.write(csv_content)
-
-    print(f"Saved {FILENAME} to {dest}/")
+    dest = args.dest if args.dest is not None else f".data/{args.task}"
+    onboard_tape_task(args.task, dest)
 
 
 if __name__ == "__main__":
