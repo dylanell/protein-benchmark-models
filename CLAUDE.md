@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Notes
+
+At the end of each session, write a session notes file to `.claude/session_notes_<N>.md`
+at the project root, where N is the next session number. Follow the style of existing
+notes in that directory. Capture: what was done, state at end of session, and TODOs for
+next session.
+
+Note: `.claude/` is gitignored (see `.gitignore`), so session notes are local only.
+
+## Gitignored Directories
+
+The following project-specific paths are gitignored:
+- `.claude/` — Claude session notes and local AI context
+- `.data/` — raw and processed datasets
+- `.models/` — saved model artifacts
+- `mlruns/`, `mlartifacts/`, `mlflow.db` — MLflow local tracking
+
 ## Project Overview
 
 ML project template for model R&D and API serving. Uses uv for package management with Python 3.11+.
