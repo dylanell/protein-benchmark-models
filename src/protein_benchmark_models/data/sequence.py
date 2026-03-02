@@ -52,10 +52,9 @@ class TokenizedSequenceDataset(Dataset):
     ):
         """PyTorch Dataset returning vocabulary-encoded amino acid sequences.
 
-        Sequences are tokenized using AA_VOCAB at construction time and stored
-        as a pre-padded (seq_len,) LongTensor per sample. Sequences longer than
-        seq_len are trimmed from the right; shorter sequences are right-padded
-        with PAD (index 0).
+        Sequences are tokenized using AA_VOCAB lazily in __getitem__. Sequences
+        longer than seq_len are trimmed from the right; shorter sequences are
+        right-padded with PAD (index 0).
 
         Each sample is a dict with keys "tokens" (int64 tensor of shape
         (seq_len,)) and "target" (float32 scalar tensor).
@@ -69,24 +68,76 @@ class TokenizedSequenceDataset(Dataset):
         self.seq_len = seq_len
         self.vocab = AA_VOCAB
 
-        self.tokens = torch.stack([self._encode(seq) for seq in sequences])
+        self.sequences = sequences
         self.targets = torch.tensor(targets, dtype=torch.float32)
 
     def _encode(self, sequence: str) -> torch.Tensor:
         ids = [self.vocab.get(aa, self.vocab["<UNK>"]) for aa in sequence[: self.seq_len]]
         if len(ids) < self.seq_len:
             ids += [self.vocab["<PAD>"]] * (self.seq_len - len(ids))
-        return torch.tensor(ids, dtype=torch.long)
+        tokens = torch.tensor(ids, dtype=torch.long)
+        return tokens
 
     def _decode(self, tokens: torch.Tensor) -> str:
         inv_vocab = {i: aa for aa, i in self.vocab.items()}
-        return "".join(inv_vocab[i] for i in tokens.tolist() if i != self.vocab["<PAD>"])
+        sequence = "".join(inv_vocab[i] for i in tokens.tolist() if i != self.vocab["<PAD>"])
+        return sequence
 
     def __len__(self) -> int:
         return len(self.targets)
 
     def __getitem__(self, index: int) -> dict:
         return {
-            "tokens": self.tokens[index],
+            "tokens": self._encode(self.sequences[index]),
+            "target": self.targets[index],
+        }
+
+
+class OneHotSequenceDataset(Dataset):
+    def __init__(
+        self,
+        sequences: list[str],
+        targets: list[float] | np.ndarray | pd.Series,
+        seq_len: int,
+    ):
+        """PyTorch Dataset returning one-hot-encoded amino acid sequences.
+
+        Sequences are tokenized and one-hot encoded using AA_VOCAB lazily in
+        __getitem__. Sequences longer than seq_len are trimmed from the right;
+        shorter sequences are right-padded with PAD (index 0).
+
+        Each sample is a dict with keys "one_hots" (float32 tensor of shape
+        (seq_len, vocab_size)) and "target" (float32 scalar tensor).
+
+        Args:
+            sequences: List of amino acid sequences as strings.
+            targets: Regression targets, one per sequence.
+            seq_len: Fixed length every sequence is padded/trimmed to.
+        """
+        super().__init__()
+        self.seq_len = seq_len
+        self.vocab = AA_VOCAB
+
+        self.sequences = sequences
+        self.targets = torch.tensor(targets, dtype=torch.float32)
+
+    def _encode(self, sequence: str) -> torch.Tensor:
+        ids = [self.vocab.get(aa, self.vocab["<UNK>"]) for aa in sequence[: self.seq_len]]
+        if len(ids) < self.seq_len:
+            ids += [self.vocab["<PAD>"]] * (self.seq_len - len(ids))
+        one_hots = torch.eye(len(self.vocab))[torch.tensor(ids, dtype=torch.long)]
+        return one_hots
+
+    def _decode(self, one_hots: torch.Tensor) -> str:
+        inv_vocab = {i: aa for aa, i in self.vocab.items()}
+        ids = torch.argmax(one_hots, dim=-1).tolist()
+        return "".join(inv_vocab[i] for i in ids if i != self.vocab["<PAD>"])
+
+    def __len__(self) -> int:
+        return len(self.targets)
+
+    def __getitem__(self, index: int) -> dict:
+        return {
+            "one_hots": self._encode(self.sequences[index]),
             "target": self.targets[index],
         }

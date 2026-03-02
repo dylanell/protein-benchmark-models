@@ -6,16 +6,14 @@ import json
 import os
 
 from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.models.gb_classifier import GBClassifier
-from protein_benchmark_models.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
 
 
 class ModelRegistry:
     """Registry for model classes."""
 
     _models: dict[str, type[BaseModel]] = {
-        "gb_classifier": GBClassifier,
-        "mlp_classifier": MLPClassifier
+        "ridge_regressor": RidgeRegressor
     }
 
     @classmethod
