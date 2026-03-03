@@ -1,11 +1,10 @@
-"""Config-driven training script for Iris classifiers.
+"""Config-driven training script for protein benchmarking tasks.
 
 Loads preprocessed data (if available) or raw data, then trains
 the model specified in the config.
 
 Usage:
-    uv run python scripts/train.py --config configs/iris_mlp_classifier.json
-    uv run python scripts/train.py --config configs/iris_gb_classifier.json
+    uv run python scripts/train.py --config configs/fluorescence_mlp_regressor.json
 """
 
 import argparse
@@ -22,7 +21,7 @@ load_dotenv()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train an Iris classifier from a JSON config.")
+    parser = argparse.ArgumentParser(description="Train a prediction model from a config.")
     parser.add_argument("--config", required=True, help="Path to JSON config file")
     args = parser.parse_args()
 

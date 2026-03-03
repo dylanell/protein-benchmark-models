@@ -7,6 +7,7 @@ import joblib
 import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score
+from scipy.stats import spearmanr
 
 from protein_benchmark_models.data import OneHotSequenceDataset
 from protein_benchmark_models.models.base import BaseModel
@@ -38,16 +39,6 @@ class RidgeRegressor(BaseModel):
 
         print(f"[ridge_regressor] Evaluating model")
 
-        # Evaluate model on trainig set
-        y_pred = self.predict(X)
-        train_rmse = np.sqrt(np.mean((y - y_pred)**2))
-        train_r2 = r2_score(y, y_pred)
-        self.log_metric("train_rmse", train_rmse)
-        self.log_metric("train_r2", train_r2)
-
-        print(f"[ridge_regressor] Train RMSE: {train_rmse:.04f}")
-        print(f"[ridge_regressor] Train R2: {train_r2:.04f}")
-
         if val_data is not None:
             # Stack valid data into one array for scikit models
             X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
@@ -60,11 +51,15 @@ class RidgeRegressor(BaseModel):
             y_pred = self.predict(X)
             val_rmse = np.sqrt(np.mean((y - y_pred)**2))
             val_r2 = r2_score(y, y_pred)
+            val_spearmanr = spearmanr(y, y_pred).statistic
             self.log_metric("val_rmse", val_rmse)
             self.log_metric("val_r2", val_r2)
+            self.log_metric("val_spearmanr", val_spearmanr)
+
 
             print(f"[ridge_regressor] Valid RMSE: {val_rmse:.04f}")
             print(f"[ridge_regressor] Valid R2: {val_r2:.04f}")
+            print(f"[ridge_regressor] Valid SpearmanR: {val_spearmanr:.04f}")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.model.predict(X)

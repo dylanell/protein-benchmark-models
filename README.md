@@ -1,6 +1,11 @@
 # ML Project Template
 
-Template for machine learning (ML) projects and API serving. 
+Template for machine learning (ML) projects and API serving.
+
+## TODO
+
+- [ ] Add 1D CNN baseline model over tokenized sequences
+- [ ] Onboard FLIP2 GB1 task and run baselines
 
 ## Using This Template
 
