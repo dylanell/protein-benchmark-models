@@ -1,28 +1,14 @@
-# ML Project Template
+# Protein Benchmark Models
 
-Template for machine learning (ML) projects and API serving.
+Benchmark suite comparing protein ML models on regression tasks from [TAPE](https://github.com/songlab-gpu/tape) and [FLIP2](https://zenodo.org/records/18433203). Simple baselines (ridge regression, MLP, CNN) are benchmarked first; pretrained protein LLM embeddings will follow.
 
 ## TODO
 
 - [x] Add 1D CNN baseline model over tokenized sequences
-- [ ] Onboard FLIP2 GB1 task and run baselines
-- [ ] Update README and remove stale sections (from original template). 
-
-## Using This Template
-
-To start a new project from this template, rename the package directory and update all references:
-
-1. Rename `src/ml_project_template/` to `src/<your_project_name>/`
-2. Update `pyproject.toml`:
-   - `name` (line 2) — the installable package name (use hyphens, e.g. `my-project`)
-   - `[project.scripts]` entry — the CLI name and module path
-3. Find and replace `ml_project_template` with `your_project_name` in all Python files (imports)
-4. Update `CLAUDE.md` and this `README.md`
-
-Then reinstall:
-```bash
-uv pip install -e "."
-```
+- [x] Onboard FLIP2 tasks and run baselines
+- [ ] Add pretrained protein LLM embedding models (ESM, etc.)
+- [ ] Train baselines to convergence on all FLIP2 splits
+- [ ] Wire up Docker training image and Argo pipeline for GPU training runs
 
 ## Setup
 
@@ -36,8 +22,8 @@ source .venv/bin/activate
 uv pip install -e "." --group dev
 ```
 
-Configure VSCode notebooks (add to .vscode/settings.json)
-```
+Configure VSCode notebooks (add to `.vscode/settings.json`):
+```json
 {
   "jupyter.notebookFileRoot": "${workspaceFolder}"
 }
@@ -46,30 +32,31 @@ Configure VSCode notebooks (add to .vscode/settings.json)
 ## Architecture
 
 ```
-src/ml_project_template/
+src/protein_benchmark_models/
 ├── data/                          # Dataset abstractions
 │   ├── base.py                    # BaseDataset ABC
+│   ├── sequence.py                # SequenceDataset, TokenizedSequenceDataset, OneHotSequenceDataset
 │   └── tabular.py                 # TabularDataset for numerical data
 ├── models/                        # Model implementations
 │   ├── base.py                    # BaseModel ABC (MLflow, save/load)
 │   ├── registry.py                # ModelRegistry for model discovery
-│   ├── gb_classifier.py           # Sklearn GradientBoosting wrapper
-│   └── mlp_classifier.py          # PyTorch MLP classifier (Fabric)
+│   ├── ridge_regressor.py         # Sklearn Ridge wrapper
+│   ├── mlp_regressor.py           # PyTorch MLP regressor (Fabric)
+│   └── cnn_regressor.py           # PyTorch 1D CNN regressor (Fabric)
 ├── modules/                       # Reusable nn.Module building blocks
-│   └── fully_connected.py         # FullyConnected (MLP block with norm/activation)
+│   ├── fully_connected.py         # FullyConnected (MLP block with norm/activation)
+│   ├── sequence_cnn.py            # SequenceCNN (stacked 1D convolutions)
+│   └── utils.py                   # Shared utilities (Transpose)
 ├── serving/
 │   └── app.py                     # FastAPI app factory
-├── utils/
-│   ├── io.py                      # S3-compatible I/O utilities
-│   └── seed.py                    # seed_everything() for reproducibility
+└── utils/
+    ├── io.py                      # S3-compatible I/O utilities
+    ├── metrics.py                 # evaluate() — RMSE, R2, SpearmanR
+    └── seed.py                    # seed_everything() for reproducibility
 
 configs/                           # Training configs (JSON)
 docker/                            # Dockerfiles per pipeline stage
-├── preprocess/Dockerfile          # Preprocessing image
-├── train/Dockerfile               # Training image
-└── serve/Dockerfile               # Serving image
-argo/                              # Argo Workflow pipelines
-scripts/                           # Data onboarding, preprocessing + training scripts
+scripts/                           # Data onboarding and pipeline entry points
 notebooks/                         # R&D notebooks
 tests/                             # Test suite (no external services needed)
 ```
@@ -78,72 +65,84 @@ tests/                             # Test suite (no external services needed)
 
 ### Data Loading
 ```python
-from protein_benchmark_models.data import TabularDataset
-from protein_benchmark_models.utils import get_storage_options
+from protein_benchmark_models.data import OneHotSequenceDataset, TokenizedSequenceDataset
+import pandas as pd
 
-dataset = TabularDataset.from_csv("s3://data/iris/iris.csv", target_column="species", storage_options=get_storage_options("s3://data/iris/iris.csv"))
-train_data, test_data = dataset.split(test_size=0.2, random_state=42)
+df = pd.read_csv(".data/tape/fluorescence/train.csv")
+sequences = df["sequence"].tolist()
+targets = df["target"].to_numpy()
+max_seq_len = df["sequence"].map(len).max()
+
+# For ridge/MLP: flatten one-hot encoded sequences
+dataset = OneHotSequenceDataset(sequences=sequences, targets=targets, seq_len=max_seq_len)
+# dataset[i] -> {"one_hots": FloatTensor(seq_len, vocab_size), "target": float32}
+
+# For CNN: integer-tokenized sequences
+dataset = TokenizedSequenceDataset(sequences=sequences, targets=targets, seq_len=max_seq_len)
+# dataset[i] -> {"tokens": LongTensor(seq_len,), "target": float32}
 ```
 
 ### Model Registry
 ```python
 from protein_benchmark_models.models import ModelRegistry
-ModelRegistry.list()  # ['gb_classifier', 'mlp_classifier']
-model = ModelRegistry.get("mlp_classifier")(layer_dims=[4, 16, 3])
+
+ModelRegistry.list()  # ['ridge_regressor', 'mlp_regressor', 'cnn_regressor']
+
+model = ModelRegistry.get("ridge_regressor")(alpha=1.0)
 
 # Load a saved model — class is inferred from config.json (no need to know it upfront)
 model = ModelRegistry.load(".models/my_model")
-# Or explicitly, when you know the model type
-model = MLPClassifier.load(".models/my_model")
 ```
 
 ### Training
 ```python
 # BaseModel.train() handles MLflow orchestration (params, artifacts)
-# Model-specific training kwargs are forwarded to _fit()
 model.train(
     experiment_name="my-experiment",
-    train_data=train_data,
-    val_data=val_data,
+    train_data=train_dataset,
+    val_data=val_dataset,
     model_path=".models/my_model",  # local or s3:// path
     run_name="run-1",               # optional
-    save_model="best",              # optional: "best" or "final" (works with S3 paths too)
-    # Model-specific training kwargs (e.g. for MLP):
-    lr=1e-3,
-    weight_decay=1e-4,
+    save_model="best",              # optional: "best" or "final"
+    seed=42,
+    tracking=True,
+    # Model-specific training kwargs (e.g. for MLP/CNN):
+    lr=1e-4,
+    weight_decay=0.01,
     max_epochs=100,
-    batch_size=32,
+    batch_size=256,
 )
 
-# Or train without MLflow tracking for quick iteration
-model.train(train_data=train_data, tracking=False, max_epochs=10)
+# Quick iteration without MLflow
+model.train(train_data=train_dataset, tracking=False, max_epochs=5)
+```
+
+### Evaluation
+```python
+import numpy as np
+from protein_benchmark_models.utils import evaluate
+
+X = np.stack([dataset[i]["one_hots"].numpy().flatten() for i in range(len(dataset))])
+y = dataset.targets.numpy()
+
+metrics = evaluate(model, X, y)
+# {"rmse": float, "r2": float, "spearmanr": float}
 ```
 
 ### Reproducibility
 
-Set a top-level `"seed"` key in your config JSON to seed all random number generators (Python, NumPy, PyTorch) for reproducible runs:
-
-```json
-{
-    "seed": 42,
-    "data": { ... },
-    "model": { ... },
-    "training": { ... }
-}
-```
-
-Scripts call `seed_everything(seed)` before data loading, and pass `seed=seed` to `model.train()` which re-seeds before training. The seed is logged to MLflow automatically.
+Pass `seed=42` to `model.train()`. The seed is logged to MLflow automatically.
 
 ```python
 from protein_benchmark_models.utils import seed_everything
-seed_everything(42)  # Seeds random, numpy, and torch (if available)
+seed_everything(42)  # Seeds random, numpy, and torch
 ```
 
 ### Model Authoring Guide
 
 #### Steps to add a new model
 
-1. Create `src/ml_project_template/models/my_model.py` extending `BaseModel` (from `base.py`). For PyTorch models, initialize `lightning.Fabric` in `__init__` and use it for device/optimizer setup in `_fit()`
+1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`). For PyTorch models, initialize `lightning.Fabric` in `__init__` and use it for device/optimizer setup in `_fit()`
 2. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
 3. Register in `registry.py`
 4. Add lifecycle and get_params tests in `tests/test_models.py`
@@ -168,7 +167,7 @@ class BaseModel(ABC):
     def _fit(self, train_data, val_data=None, **kwargs) -> None
     def _save_weights(self, dir_path: str) -> None
     def _load_weights(self, dir_path: str) -> None
-    def predict(self, X: np.ndarray) -> np.ndarray
+    def predict(self, X: np.ndarray) -> np.ndarray  # always returns shape (N,)
 
     # Log to MLflow (no-op when tracking=False) — use in _fit() instead of mlflow directly
     def log_param(self, key, value) -> None
@@ -183,34 +182,71 @@ class BaseModel(ABC):
 
 `BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments into `self._model_params`. This means `get_params()` works out of the box — you don't need to build param dicts manually or override it.
 
-**How it works:**
+Training-time arguments (`lr`, `batch_size`, `max_epochs`, etc.) are passed to `_fit()`, not `__init__()`, so they are **not** auto-captured. Log them manually inside `_fit()` using `self.log_param()`.
 
-1. `BaseModel.__init_subclass__` wraps every subclass `__init__` with a decorator.
-2. After the original `__init__` runs, the wrapper inspects the method signature with `inspect.signature()`, binds the actual call arguments (including defaults) via `sig.bind()` + `apply_defaults()`, and stores them in `self._model_params`.
-3. This works across the inheritance chain: when `super().__init__()` is called, the parent's wrapped `__init__` runs first and captures its own params. The child's wrapper then merges its params on top.
-4. `get_params()` returns the combined `_model_params` dict. `train()` logs it to MLflow automatically.
+Override `get_params()` only when auto-capture is insufficient — e.g. when `__init__` uses `**kwargs` to forward arguments to an underlying library that has its own defaults (see `ridge_regressor.py` for an example).
 
-See the implementation in `src/ml_project_template/models/base.py` lines 35–74.
+## Datasets
 
-**Example — what happens when `MLPClassifier(layer_dims=[4, 8, 3])` is created:**
+### Onboarding
 
-1. `MLPClassifier.__init__` runs and completes
-2. The wrapper captures all arguments — `layer_dims=[4, 8, 3]`, `hidden_activation="ReLU"`, `output_activation="Identity"`, `use_bias=True`, `norm=None`, plus all Fabric defaults (`accelerator="auto"`, etc.) — into `self._model_params`
-3. `model.get_params()` returns the full dict
+Download a dataset to a local `.data/` subdirectory (or an S3 prefix with `--dest s3://...`):
 
-**When to override `get_params()`:**
+```bash
+# TAPE tasks
+uv run python scripts/onboard.py --task fluorescence
+uv run python scripts/onboard.py --task stability
 
-Override when auto-capture is insufficient — specifically when your `__init__` uses `**kwargs` to forward arguments to an underlying library. Auto-capture will record the explicitly passed kwargs, but won't capture the library's internal defaults.
+# FLIP2 tasks (all splits downloaded into subdirectories)
+uv run python scripts/onboard.py --task amylase
+uv run python scripts/onboard.py --task ired
+uv run python scripts/onboard.py --task nucb
+uv run python scripts/onboard.py --task hydro
+uv run python scripts/onboard.py --task rhomax
+```
 
-Example: `GBClassifier.__init__(self, **kwargs)` forwards to sklearn's `GradientBoostingClassifier(**kwargs)`. If you create `GBClassifier(n_estimators=200)`, auto-capture only sees `{"n_estimators": 200}`. But sklearn has dozens of other params with defaults (`learning_rate=0.1`, `max_depth=3`, etc.) that are important for reproducibility. So `GBClassifier` overrides `get_params()` to delegate to `self.model.get_params()`, which returns the full set.
+Output structure:
+```
+.data/tape/<task>/train.csv, valid.csv, test.csv
+.data/flip2/<task>/<split>/train.csv, valid.csv, test.csv
+```
 
-**What NOT to worry about — training params:**
+All CSVs share a consistent schema:
 
-Training-time arguments like `lr`, `batch_size`, `max_epochs` are passed to `_fit()`, not `__init__()`, so they are **not** auto-captured. These are logged manually inside `_fit()` using `self.log_param()`. This is by design: `__init__` params define the model architecture (what gets saved/loaded), while training params are run-specific.
+| column | type | notes |
+|---|---|---|
+| `sequence` | str | Amino acid sequence |
+| `target` | float | Regression target |
+| `num_mutations` | int | TAPE fluorescence only |
 
-## Quick Start
+### TAPE — Fluorescence
 
-### Local Services (MinIO + MLflow)
+- **Source:** Sarkisyan et al. 2016 (GFP), via [TAPE](https://github.com/songlab-gpu/tape)
+- **Task:** Predict log-fluorescence from amino acid sequence
+- **Splits:** train 21,446 / valid 5,362 / test 27,217
+- **OOD split:** test set contains sequences with ≥4 mutations; train/valid have ≤3
+
+Most sequences are 237 AA (wild-type GFP length). A small fraction are shorter (236 or 235 AA) due to deletions introduced during error-prone PCR mutagenesis. The `num_mutations` field counts all edit-distance differences from wild-type — substitutions and deletions alike. Filter on `seq_len == 237` if you want substitution-only variants.
+
+### TAPE — Stability
+
+- **Source:** Rocklin et al. 2017 (de novo proteins), via [TAPE](https://github.com/songlab-gpu/tape)
+- **Task:** Predict thermodynamic stability score from amino acid sequence
+- **Splits:** train 53,614 / valid 2,512 / test 12,851
+
+### FLIP2 — Mutation Fitness Tasks
+
+All FLIP2 tasks are sourced from [Zenodo record 18433203](https://zenodo.org/records/18433203). Each task has multiple named splits with different generalization challenges.
+
+| task | splits |
+|---|---|
+| `amylase` | `one_to_many`, `close_to_far`, `far_to_close`, `by_mutation`, `random_split` |
+| `ired` | `two_to_many`, `random` |
+| `nucb` | `two_to_many`, `random` |
+| `hydro` | `three_to_many`, `low_to_high`, `to_P06241`, `to_P0A9X9`, `to_P01053`, `random_split` |
+| `rhomax` | `by_wild_type` |
+
+## Local Services (MinIO + MLflow)
 
 Start MinIO (S3-compatible storage) and MLflow (experiment tracking) via Docker Compose:
 
@@ -221,151 +257,66 @@ docker compose up -d
 - **MLflow UI:** [http://localhost:5000](http://localhost:5000)
 - **MinIO Console:** [http://localhost:7001](http://localhost:7001) (login: `minioadmin`/`minioadmin`)
 
-Create `data` and `models` buckets in the MinIO console, then onboard data:
-
-```bash
-uv run python scripts/onboard.py --dest s3://data/iris/
-```
-
 Stop services with `docker compose down`. Data persists in Docker volumes across restarts.
 
-### Docker
+## Docker
+
+Dockerfiles for each pipeline stage live in `docker/`. These are not yet wired up for active use but are intended for running training jobs remotely (e.g. on a GPU instance).
 
 ```bash
 # Build images
 docker build -t preprocess-job -f docker/preprocess/Dockerfile .
 docker build -t train-job -f docker/train/Dockerfile .
-
-# Run preprocessing (reads/writes data via S3)
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -v $(pwd)/configs:/app/configs \
-  preprocess-job --config configs/iris_mlp_classifier.json
-
-# Run training (reads data via S3, saves model to S3, logs to MLflow)
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -v $(pwd)/configs:/app/configs \
-  train-job --config configs/iris_mlp_classifier.json
-```
-
-> `--env-file .env` loads S3 and MLflow credentials. The `-e` flags override the endpoint URLs to use `host.docker.internal`, which resolves to the host machine from inside Docker containers (Mac/Windows). On Linux, add `--add-host=host.docker.internal:host-gateway` to the `docker run` command.
-
-### Model Serving
-
-Serve a trained model via FastAPI. The server reads the same JSON config used for training to determine which model to load.
-
-```bash
-# Local (requires a trained model saved to the configured model_path)
-uv run python scripts/serve.py --config configs/iris_mlp_classifier.json
-
-# Docker
 docker build -t serve-job -f docker/serve/Dockerfile .
 
+# Run a training job (reads data via S3, saves model to S3, logs to MLflow)
 docker run --env-file .env \
   -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -p 8000:8000 \
+  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
+  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
   -v $(pwd)/configs:/app/configs \
-  serve-job --config configs/iris_mlp_classifier.json
+  train-job --config configs/<your_config>.json
 ```
 
-Test the endpoints:
+> `--env-file .env` loads S3 and MLflow credentials. On Linux, add `--add-host=host.docker.internal:host-gateway` to resolve the host from inside the container.
+
+## Argo Workflows
+
+Argo Workflow pipelines live in `argo/` and are intended for orchestrating multi-step training runs on Kubernetes (e.g. preprocess → train). See [argo/README.md](argo/README.md) for details.
 
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/info
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"features": [[5.1, 3.5, 1.4, 0.2]]}'
-```
-
-Auto-generated API docs are available at `http://localhost:8000/docs`.
-
-### Argo Workflows (Local)
-
-Run the full pipeline (preprocess → train) as an Argo Workflow DAG on Docker Desktop's K8s cluster. See [argo/README.md](argo/README.md) for details.
-
-```bash
-# First-time: install Argo Workflows
+# First-time: install Argo Workflows on Docker Desktop's K8s cluster
 kubectl create namespace argo
 kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
 
-# First-time: create secret and config map in argo namespace
+# First-time: create S3 credentials secret and configs config map
 source .env && kubectl create secret generic s3-credentials --namespace argo \
   --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
 kubectl create configmap training-configs --namespace argo --from-file=configs/
 
-# Submit a pipeline (uses MLP config by default)
-argo submit -n argo argo/train-classifier-pipeline.yaml --watch
-
-# Or specify a different config
-argo submit -n argo argo/train-classifier-pipeline.yaml -p config=configs/iris_gb_classifier.json --watch
+# Submit a pipeline
+argo submit -n argo argo/train-pipeline.yaml --watch
 
 # Argo UI (optional)
 kubectl port-forward -n argo svc/argo-server 2746:2746
 # Then open https://localhost:2746
 ```
 
-To update configs after changing them locally:
+To update the configs config map after changing files locally:
 
 ```bash
 kubectl create configmap training-configs --namespace argo --from-file=configs/ --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-## Datasets
-
-### Onboarding
-
-Download a dataset to `.data/<task>/` (local) or an S3 prefix:
-
-```bash
-uv run python scripts/onboard.py --task fluorescence
-uv run python scripts/onboard.py --task stability
-uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
-```
-
-Each task produces `train.csv`, `valid.csv`, and `test.csv` with a consistent schema:
-
-| column | type | tasks |
-|---|---|---|
-| `sequence` | str | all |
-| `target` | float | all |
-| `num_mutations` | int | fluorescence only |
-
-### TAPE — Fluorescence
-
-- **Source:** Sarkisyan et al. 2016 (GFP), via [TAPE](https://github.com/songlab-gpu/tape)
-- **Task:** Predict log-fluorescence from amino acid sequence
-- **Splits:** train 21,446 / valid 5,362 / test 27,217
-
-Most sequences are 237 AA (wild-type GFP length). A small fraction are shorter:
-477 sequences are 236 AA and 71 are 235 AA (total ~2.4% of data). These arise from
-deletions introduced during error-prone PCR mutagenesis. The `num_mutations` field
-counts **all** edit-distance differences from wild-type — substitutions and deletions
-alike — so a 236 AA sequence with `num_mutations=1` has exactly one deletion and no
-substitutions. Filter on `seq_len == 237` if you want substitution-only variants.
-
-### TAPE — Stability
-
-- **Source:** Rocklin et al. 2017 (de novo proteins), via [TAPE](https://github.com/songlab-gpu/tape)
-- **Task:** Predict thermodynamic stability score from amino acid sequence
-- **Splits:** train 53,614 / valid 2,512 / test 12,851
-
 ## Testing
-
-Run the test suite with:
 
 ```bash
 uv run pytest tests/ -v
 ```
 
-Tests use `tracking=False` to skip MLflow, so no external services (MLflow, MinIO) are needed. They run entirely from in-memory numpy data.
+Tests use `tracking=False` to skip MLflow — no external services needed. They run entirely from in-memory numpy data.
 
 When adding a new model, add matching tests in `tests/test_models.py` following the existing pattern:
-- **`test_lifecycle`** — create, train (with `tracking=False`), predict (check output shape), save to a temp dir, load into a fresh instance, predict again (outputs match)
+- **`test_lifecycle`** — create, train (`tracking=False`), predict (check output shape), save, load, predict again (outputs match)
 - **`test_get_params`** — verify `get_params()` returns the expected keys and values
