@@ -1,6 +1,6 @@
 """Tests for model registry.
 
-Tests cover the ModelRegistry API:
+Covers:
 - list/get: Discover and retrieve model classes by name.
 - get_name: Reverse lookup — get the registry name for a model class.
 - load: Full roundtrip — save a model to a directory, then reconstruct it
@@ -13,74 +13,82 @@ import numpy as np
 import pytest
 
 from protein_benchmark_models.models import ModelRegistry
-from protein_benchmark_models.models.gb_classifier import GBClassifier
-from protein_benchmark_models.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
+from protein_benchmark_models.models.mlp_regressor import MLPRegressor
+from protein_benchmark_models.models.cnn_regressor import CNNRegressor
+from tests.conftest import SEQ_LEN, VOCAB_SIZE, onehot_X, token_X
 
 
 def test_list():
-    """All registered model names should be discoverable."""
     names = ModelRegistry.list()
-    assert "gb_classifier" in names
-    assert "mlp_classifier" in names
+    assert "ridge_regressor" in names
+    assert "mlp_regressor" in names
+    assert "cnn_regressor" in names
 
 
 def test_get():
-    """get() should return the exact class registered under each name."""
-    assert ModelRegistry.get("gb_classifier") is GBClassifier
-    assert ModelRegistry.get("mlp_classifier") is MLPClassifier
+    assert ModelRegistry.get("ridge_regressor") is RidgeRegressor
+    assert ModelRegistry.get("mlp_regressor") is MLPRegressor
+    assert ModelRegistry.get("cnn_regressor") is CNNRegressor
 
 
 def test_get_unknown():
-    """get() should raise ValueError for unregistered names."""
     with pytest.raises(ValueError, match="Unknown model"):
         ModelRegistry.get("nonexistent")
 
 
 def test_get_name():
-    """get_name() should reverse-lookup the registry name from a model class."""
-    assert ModelRegistry.get_name(MLPClassifier) == "mlp_classifier"
-    assert ModelRegistry.get_name(GBClassifier) == "gb_classifier"
+    assert ModelRegistry.get_name(RidgeRegressor) == "ridge_regressor"
+    assert ModelRegistry.get_name(MLPRegressor) == "mlp_regressor"
+    assert ModelRegistry.get_name(CNNRegressor) == "cnn_regressor"
 
 
 def test_get_name_unknown():
-    """get_name() should raise ValueError for unregistered classes."""
     class FakeModel:
         pass
     with pytest.raises(ValueError, match="not registered"):
         ModelRegistry.get_name(FakeModel)
 
 
-def test_load_mlp(iris_tiny):
-    """ModelRegistry.load() should reconstruct an MLP from a saved directory."""
-    model = MLPClassifier(layer_dims=[4, 8, 3])
-    model.train(train_data=iris_tiny, tracking=False, max_epochs=5)
-    preds = model.predict(iris_tiny.X)
+def test_load_ridge(onehot_data):
+    model = RidgeRegressor(alpha=1.0)
+    model.train(train_data=onehot_data, tracking=False)
+    X = onehot_X(onehot_data)
+    preds = model.predict(X)
 
     with tempfile.TemporaryDirectory() as tmp:
-        # save() writes config.json + model.pt to the directory
         model.save(f"{tmp}/model")
-
-        # load() reads config.json, instantiates MLPClassifier, loads weights
         loaded = ModelRegistry.load(f"{tmp}/model")
-
-        assert isinstance(loaded, MLPClassifier)
-        preds2 = loaded.predict(iris_tiny.X)
-        np.testing.assert_array_equal(preds, preds2)
+        assert isinstance(loaded, RidgeRegressor)
+        np.testing.assert_array_equal(preds, loaded.predict(X))
 
 
-def test_load_gb(iris_tiny):
-    """ModelRegistry.load() should reconstruct a GB classifier from a saved directory."""
-    model = GBClassifier(n_estimators=10, max_depth=2)
-    model.train(train_data=iris_tiny, tracking=False)
-    preds = model.predict(iris_tiny.X)
+def test_load_mlp(onehot_data):
+    model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
+    model.train(train_data=onehot_data, tracking=False, max_epochs=5)
+    X = onehot_X(onehot_data)
+    preds = model.predict(X)
 
     with tempfile.TemporaryDirectory() as tmp:
-        # save() writes config.json + model.joblib to the directory
         model.save(f"{tmp}/model")
-
-        # load() reads config.json, instantiates GBClassifier, loads weights
         loaded = ModelRegistry.load(f"{tmp}/model")
+        assert isinstance(loaded, MLPRegressor)
+        np.testing.assert_array_equal(preds, loaded.predict(X))
 
-        assert isinstance(loaded, GBClassifier)
-        preds2 = loaded.predict(iris_tiny.X)
-        np.testing.assert_array_equal(preds, preds2)
+
+def test_load_cnn(tokenized_data):
+    model = CNNRegressor(
+        embed_dims=[VOCAB_SIZE, 8],
+        kernel_spec=[[3, 8, 1]],
+        seq_length=SEQ_LEN,
+        output_dim=1,
+    )
+    model.train(train_data=tokenized_data, tracking=False, max_epochs=5)
+    X = token_X(tokenized_data)
+    preds = model.predict(X)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        model.save(f"{tmp}/model")
+        loaded = ModelRegistry.load(f"{tmp}/model")
+        assert isinstance(loaded, CNNRegressor)
+        np.testing.assert_array_equal(preds, loaded.predict(X))

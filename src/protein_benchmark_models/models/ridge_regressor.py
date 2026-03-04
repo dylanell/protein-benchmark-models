@@ -6,8 +6,6 @@ import os
 import joblib
 import numpy as np
 from sklearn.linear_model import Ridge
-from sklearn.metrics import r2_score
-from scipy.stats import spearmanr
 
 from protein_benchmark_models.data import OneHotSequenceDataset
 from protein_benchmark_models.models.base import BaseModel
@@ -31,35 +29,21 @@ class RidgeRegressor(BaseModel):
 
         print(f"[ridge_regressor] Train X: {X.shape}")
         print(f"[ridge_regressor] Train y: {y.shape}")
-
         print(f"[ridge_regressor] Training model")
 
-        # Train model
         self.model.fit(X, y)
 
-        print(f"[ridge_regressor] Evaluating model")
-
+        # Final validation metrics
         if val_data is not None:
-            # Stack valid data into one array for scikit models
+            from protein_benchmark_models.utils import evaluate
             X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
-            y = np.stack([val_data[i]["target"].numpy() for i in range(len(val_data))])
-
-            print(f"[ridge_regressor] Valid X: {X.shape}")
-            print(f"[ridge_regressor] Valid y: {y.shape}")
-
-            # Evaluate model on valid set
-            y_pred = self.predict(X)
-            val_rmse = np.sqrt(np.mean((y - y_pred)**2))
-            val_r2 = r2_score(y, y_pred)
-            val_spearmanr = spearmanr(y, y_pred).statistic
-            self.log_metric("val_rmse", val_rmse)
-            self.log_metric("val_r2", val_r2)
-            self.log_metric("val_spearmanr", val_spearmanr)
-
-
-            print(f"[ridge_regressor] Valid RMSE: {val_rmse:.04f}")
-            print(f"[ridge_regressor] Valid R2: {val_r2:.04f}")
-            print(f"[ridge_regressor] Valid SpearmanR: {val_spearmanr:.04f}")
+            y = val_data.targets.numpy()
+            metrics = evaluate(self, X, y)
+            for k, v in metrics.items():
+                self.log_metric(f"val_{k}", v)
+            print(f"[ridge_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+            print(f"[ridge_regressor] Valid R2: {metrics['r2']:.04f}")
+            print(f"[ridge_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.model.predict(X)

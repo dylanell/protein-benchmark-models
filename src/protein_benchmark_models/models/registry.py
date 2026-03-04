@@ -8,6 +8,7 @@ import os
 from protein_benchmark_models.models.base import BaseModel
 from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
 from protein_benchmark_models.models.mlp_regressor import MLPRegressor
+from protein_benchmark_models.models.cnn_regressor import CNNRegressor
 
 
 class ModelRegistry:
@@ -15,7 +16,8 @@ class ModelRegistry:
 
     _models: dict[str, type[BaseModel]] = {
         "ridge_regressor": RidgeRegressor,
-        "mlp_regressor": MLPRegressor
+        "mlp_regressor": MLPRegressor,
+        "cnn_regressor": CNNRegressor
     }
 
     @classmethod

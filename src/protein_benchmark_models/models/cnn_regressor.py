@@ -1,4 +1,5 @@
-"""PyTorch MLP regressor."""
+"""PyTorch CNN sequence regressor."""
+
 
 from __future__ import annotations
 
@@ -15,17 +16,20 @@ from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from protein_benchmark_models.data import OneHotSequenceDataset
+from protein_benchmark_models.data import TokenizedSequenceDataset
 from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.modules.fully_connected import FullyConnected
+from protein_benchmark_models.modules.sequence_cnn import SequenceCNN
 
-
-class MLPRegressor(BaseModel):
-    """MLP regressor backed by a FullyConnected module."""
+class CNNRegressor(BaseModel):
+    """Sequence regressor model using 1D CNNs."""
 
     def __init__(
         self,
-        layer_dims: list[int],
+        embed_dims: list[int],
+        kernel_spec: list[list[int]],
+        seq_length: int,
+        output_dim: int,
+        padding_idx: int = 0,
         hidden_activation: str = "ReLU",
         output_activation: str = "Identity",
         use_bias: bool = True,
@@ -51,20 +55,26 @@ class MLPRegressor(BaseModel):
             loggers=loggers
         )
 
-        self.model = FullyConnected(
-            layer_dims=layer_dims,
+        self.seq_length = seq_length
+
+        self.model = SequenceCNN(
+            embed_dims=embed_dims,
+            kernel_spec=kernel_spec,
+            seq_length=seq_length,
+            output_dim=output_dim,
+            padding_idx=padding_idx,
             hidden_activation=hidden_activation,
             output_activation=output_activation,
             use_bias=use_bias,
-            norm=norm,
+            norm=norm
         )
 
         self.loss_fcn = nn.MSELoss()
 
     def _fit(
         self,
-        train_data: OneHotSequenceDataset,
-        val_data: OneHotSequenceDataset | None = None,
+        train_data: TokenizedSequenceDataset,
+        val_data: TokenizedSequenceDataset | None = None,
         *,
         lr: float = 1e-3,
         weight_decay: float = 0.0,
@@ -73,17 +83,18 @@ class MLPRegressor(BaseModel):
         val_frequency: int = 1,
         patience: int = -1,
         save_model: str | None = None,
-        model_path: str | None = None,
-    ) -> None:
+        model_path: str | None = None
+    ):
         if patience > 0 and val_data is None:
             raise ValueError("Patience requires a validation dataset.")
         if save_model == "best" and val_data is None:
             raise ValueError("save_model='best' requires a validation dataset.")
-
-        # Log training parameters before training starts
+        
+        # Log training parameters
         self.log_param("lr", lr)
         self.log_param("weight_decay", weight_decay)
         self.log_param("batch_size", batch_size)
+        self.log_param("seq_length", self.seq_length)
         self.log_param("max_epochs", max_epochs)
         self.log_param("val_frequency", val_frequency)
         self.log_param("patience", patience)
@@ -109,7 +120,7 @@ class MLPRegressor(BaseModel):
             cum_train_loss = 0
             model.train()
             for batch in train_dataloader:
-                X = batch["one_hots"].flatten(start_dim=1)
+                X = batch["tokens"]
                 y = batch["target"]
                 optimizer.zero_grad()
                 output = model(X).squeeze()
@@ -127,7 +138,7 @@ class MLPRegressor(BaseModel):
                 model.eval()
                 with torch.no_grad():
                     for batch in val_dataloader:
-                        X = batch["one_hots"].flatten(start_dim=1)
+                        X = batch["tokens"]
                         y = batch["target"]
                         output = model(X).squeeze()
                         loss = torch.sqrt(self.loss_fcn(output, y))
@@ -155,26 +166,30 @@ class MLPRegressor(BaseModel):
         # Final validation metrics
         if val_data is not None:
             from protein_benchmark_models.utils import evaluate
-            X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
+            X = np.stack([val_data[i]["tokens"].numpy() for i in range(len(val_data))])
             y = val_data.targets.numpy()
             metrics = evaluate(self, X, y)
             for k, v in metrics.items():
                 self.log_metric(f"val_{k}", v)
-            print(f"[mlp_regressor] Valid RMSE: {metrics['rmse']:.04f}")
-            print(f"[mlp_regressor] Valid R2: {metrics['r2']:.04f}")
-            print(f"[mlp_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
+            print(f"[cnn_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+            print(f"[cnn_regressor] Valid R2: {metrics['r2']:.04f}")
+            print(f"[cnn_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
 
         if save_model == "final":
             self.save(model_path)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Run inference. Returns raw model output as numpy array."""
+        """Run inference on an array of token indices.
+
+        Args:
+            X: Int64 array of shape (N, seq_len) containing vocabulary indices.
+        """
         self.model.eval()
-        X_tensor = torch.from_numpy(X).float().to(self.fabric.device)
+        X_tensor = torch.from_numpy(X).long().to(self.fabric.device)
         with torch.no_grad():
             output = self.model(X_tensor)
         return output.squeeze(-1).cpu().numpy()
-
+    
     def _save_weights(self, dir_path: str) -> None:
         """Save model state dict to directory."""
         self.fabric.save(os.path.join(dir_path, "model.pt"), {"model": self.model})

@@ -4,7 +4,8 @@ import numpy as np
 import torch
 
 from protein_benchmark_models.utils import seed_everything
-from protein_benchmark_models.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.mlp_regressor import MLPRegressor
+from tests.conftest import SEQ_LEN, VOCAB_SIZE, onehot_X
 
 
 class TestSeedEverything:
@@ -28,22 +29,20 @@ class TestSeedEverything:
 
         torch.testing.assert_close(a, b)
 
-    def test_mlp_training_determinism(self, iris_tiny):
-        """Two MLP training runs with the same seed produce identical predictions.
+    def test_mlp_training_determinism(self, onehot_data):
+        """Two MLP training runs with the same seed produce identical predictions."""
+        X = onehot_X(onehot_data)
 
-        Seeds before model construction (matching the real script flow:
-        seed_everything → create model → model.train(seed=...)).
-        """
         def train_and_predict(seed):
             seed_everything(seed)
-            model = MLPClassifier(layer_dims=[4, 8, 3])
+            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
             model.train(
-                train_data=iris_tiny,
+                train_data=onehot_data,
                 tracking=False,
                 seed=seed,
                 max_epochs=5,
             )
-            return model.predict(iris_tiny.X)
+            return model.predict(X)
 
         preds1 = train_and_predict(99)
         preds2 = train_and_predict(99)
