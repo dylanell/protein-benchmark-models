@@ -34,14 +34,16 @@ class TestSeedEverything:
         X = onehot_X(onehot_data)
 
         def train_and_predict(seed):
-            seed_everything(seed)
-            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
-            model.train(
-                train_data=onehot_data,
-                tracking=False,
-                seed=seed,
-                max_epochs=5,
-            )
+            import tempfile
+            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1], seed=seed)
+            with tempfile.TemporaryDirectory() as tmp:
+                model.train(
+                    train_data=onehot_data,
+                    val_data=onehot_data,
+                    tracking=False,
+                    model_path=f"{tmp}/model",
+                    max_epochs=5,
+                )
             return model.predict(X)
 
         preds1 = train_and_predict(99)

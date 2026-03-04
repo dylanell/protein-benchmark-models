@@ -1,0 +1,20 @@
+{
+    "seed": 42,
+    "data": {
+        "train_path": ".data/tape/fluorescence/train.csv",
+        "valid_path": ".data/tape/fluorescence/valid.csv",
+        "dataset_type": "one_hot"
+    },
+    "model": {
+        "name": "ridge_regressor",
+        "params": {
+            "alpha": 1.0
+        }
+    },
+    "training": {
+        "experiment_name": "tape_fluorescence_regression",
+        "run_name": null,
+        "model_path": ".models/tape_fluorescence_ridge_regressor",
+        "tracking": true
+    }
+}

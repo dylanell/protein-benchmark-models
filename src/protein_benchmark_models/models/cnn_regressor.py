@@ -19,6 +19,7 @@ from lightning.fabric.strategies import Strategy
 from protein_benchmark_models.data import TokenizedSequenceDataset
 from protein_benchmark_models.models.base import BaseModel
 from protein_benchmark_models.modules.sequence_cnn import SequenceCNN
+from protein_benchmark_models.utils import evaluate, seed_everything
 
 class CNNRegressor(BaseModel):
     """Sequence regressor model using 1D CNNs."""
@@ -34,6 +35,7 @@ class CNNRegressor(BaseModel):
         output_activation: str = "Identity",
         use_bias: bool = True,
         norm: Literal["batch", "layer"] | None = None,
+        seed: int | None = None,
         accelerator: str | Accelerator = "auto",
         strategy: str | Strategy = "auto",
         devices: list[int] | str | int = "auto",
@@ -43,6 +45,9 @@ class CNNRegressor(BaseModel):
         loggers: Logger | list[Logger] | None = None
     ):
         super().__init__()
+        self.seed = seed
+        if seed is not None:
+            seed_everything(seed)
 
         # Initialize fabric
         self.fabric = L.Fabric(
@@ -74,22 +79,19 @@ class CNNRegressor(BaseModel):
     def _fit(
         self,
         train_data: TokenizedSequenceDataset,
-        val_data: TokenizedSequenceDataset | None = None,
+        val_data: TokenizedSequenceDataset,
         *,
+        model_path: str,
         lr: float = 1e-3,
         weight_decay: float = 0.0,
         batch_size: int = 32,
         max_epochs: int = 100,
         val_frequency: int = 1,
-        patience: int = -1,
-        save_model: str | None = None,
-        model_path: str | None = None
+        patience: int = -1
     ):
-        if patience > 0 and val_data is None:
-            raise ValueError("Patience requires a validation dataset.")
-        if save_model == "best" and val_data is None:
-            raise ValueError("save_model='best' requires a validation dataset.")
-        
+        if self.seed is not None:
+            seed_everything(self.seed)
+
         # Log training parameters
         self.log_param("lr", lr)
         self.log_param("weight_decay", weight_decay)
@@ -106,9 +108,8 @@ class CNNRegressor(BaseModel):
         # Initialize dataloaders
         train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
         train_dataloader = self.fabric.setup_dataloaders(train_dataloader)
-        if val_data is not None:
-            val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-            val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
+        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+        val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
 
         epochs_without_improvement = 0
         val_loss = float("inf")
@@ -133,7 +134,7 @@ class CNNRegressor(BaseModel):
             self.log_metric("train_loss", train_loss, step=epoch)
 
             # Validate
-            if (val_data is not None) and ((epoch + 1) % val_frequency == 0):
+            if (epoch + 1) % val_frequency == 0:
                 cum_val_loss = 0
                 model.eval()
                 with torch.no_grad():
@@ -150,8 +151,7 @@ class CNNRegressor(BaseModel):
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     epochs_without_improvement = 0
-                    if save_model == "best":
-                        self.save(model_path)
+                    self.save(model_path + "_best")
                 else:
                     epochs_without_improvement += 1
 
@@ -164,19 +164,14 @@ class CNNRegressor(BaseModel):
             pbar.set_description(status)
 
         # Final validation metrics
-        if val_data is not None:
-            from protein_benchmark_models.utils import evaluate
-            X = np.stack([val_data[i]["tokens"].numpy() for i in range(len(val_data))])
-            y = val_data.targets.numpy()
-            metrics = evaluate(self, X, y)
-            for k, v in metrics.items():
-                self.log_metric(f"val_{k}", v)
-            print(f"[cnn_regressor] Valid RMSE: {metrics['rmse']:.04f}")
-            print(f"[cnn_regressor] Valid R2: {metrics['r2']:.04f}")
-            print(f"[cnn_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
-
-        if save_model == "final":
-            self.save(model_path)
+        X = np.stack([val_data[i]["tokens"].numpy() for i in range(len(val_data))])
+        y = val_data.targets.numpy()
+        metrics = evaluate(self, X, y)
+        for k, v in metrics.items():
+            self.log_metric(f"val_{k}", v)
+        print(f"[cnn_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+        print(f"[cnn_regressor] Valid R2: {metrics['r2']:.04f}")
+        print(f"[cnn_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Run inference on an array of token indices.

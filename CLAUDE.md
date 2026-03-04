@@ -154,18 +154,16 @@ model = MLPClassifier.load(".models/my_model")
 model.train(
     experiment_name="my-experiment",
     train_data=train_data,
-    val_data=val_data,
-    model_path=".models/my_model",
-    run_name="run-1",        # optional
-    save_model="best",       # optional: "best" saves on each new best val loss,
-                             #           "final" saves once after training completes.
-                             #           Works with local and S3 paths.
+    val_data=val_data,           # required
+    model_path=".models/my_model",  # required; _final and _best suffixes are appended automatically
+    run_name="run-1",            # optional
     # Model-specific training kwargs (e.g. for MLP):
     lr=1e-3,
     weight_decay=1e-4,
     max_epochs=100,
     batch_size=32,
 )
+# Writes: .models/my_model_final (always) and .models/my_model_best (PyTorch only, on val improvement)
 ```
 
 ### Adding New Models
@@ -189,7 +187,7 @@ class BaseModel(ABC):
     def load(cls, path: str) -> BaseModel
 
     # Abstract — subclasses must implement
-    def _fit(self, train_data, val_data=None, **kwargs) -> None
+    def _fit(self, train_data, val_data, **kwargs) -> None
     def _save_weights(self, dir_path: str) -> None
     def _load_weights(self, dir_path: str) -> None
     def predict(self, X: np.ndarray) -> np.ndarray
@@ -217,6 +215,8 @@ See README.md "Automatic `__init__` param capture" for a full walkthrough with e
 - **NumPy I/O**: All models return raw numpy output from `predict()` — caller handles post-processing (argmax, etc.)
 - **Training params**: Logged manually inside `_fit()`, not auto-captured (only `__init__` args are auto-captured)
 - **Reproducibility**: Configs have a top-level `"seed"` key. Scripts call `seed_everything(seed)` early, and pass `seed=seed` to `model.train()`. The seed is logged to MLflow automatically.
+- **`embed_dims[0]` in CNN configs**: Must equal `len(AA_VOCAB)` = 22 (the fixed protein amino acid vocabulary size including PAD and UNK). This is intentionally explicit in configs — it's a constant property of the protein alphabet, not a data-derived value like `seq_len`, so it is not auto-injected by `train.py`.
+- **`_fit()` arg ordering**: `model_path` is always first after `*` in both MLP and CNN `_fit()` signatures, followed by training hyperparams (`lr`, `weight_decay`, etc.).
 
 ## Environment Variables
 

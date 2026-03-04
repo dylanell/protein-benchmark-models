@@ -9,18 +9,19 @@ from sklearn.linear_model import Ridge
 
 from protein_benchmark_models.data import OneHotSequenceDataset
 from protein_benchmark_models.models.base import BaseModel
+from protein_benchmark_models.utils import evaluate
 
 
 class RidgeRegressor(BaseModel):
     """Scikit-learn Ridge regression wrapper."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, seed: int | None = None, **kwargs):
         self.model = Ridge(**kwargs)
 
     def _fit(
         self,
         train_data: OneHotSequenceDataset,
-        val_data: OneHotSequenceDataset | None = None,
+        val_data: OneHotSequenceDataset,
         **kwargs
     ) -> None:
         # Stack training data into one array for scikit models
@@ -34,16 +35,14 @@ class RidgeRegressor(BaseModel):
         self.model.fit(X, y)
 
         # Final validation metrics
-        if val_data is not None:
-            from protein_benchmark_models.utils import evaluate
-            X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
-            y = val_data.targets.numpy()
-            metrics = evaluate(self, X, y)
-            for k, v in metrics.items():
-                self.log_metric(f"val_{k}", v)
-            print(f"[ridge_regressor] Valid RMSE: {metrics['rmse']:.04f}")
-            print(f"[ridge_regressor] Valid R2: {metrics['r2']:.04f}")
-            print(f"[ridge_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
+        X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
+        y = val_data.targets.numpy()
+        metrics = evaluate(self, X, y)
+        for k, v in metrics.items():
+            self.log_metric(f"val_{k}", v)
+        print(f"[ridge_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+        print(f"[ridge_regressor] Valid R2: {metrics['r2']:.04f}")
+        print(f"[ridge_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.model.predict(X)

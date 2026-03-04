@@ -3,8 +3,8 @@
 Covers:
 - list/get: Discover and retrieve model classes by name.
 - get_name: Reverse lookup — get the registry name for a model class.
-- load: Full roundtrip — save a model to a directory, then reconstruct it
-  from just the directory path (reads config.json, instantiates, loads weights).
+- load: Full roundtrip — train a model, then reconstruct it from just the
+  directory path (reads config.json, instantiates, loads weights).
 """
 
 import tempfile
@@ -51,44 +51,41 @@ def test_get_name_unknown():
 
 
 def test_load_ridge(onehot_data):
-    model = RidgeRegressor(alpha=1.0)
-    model.train(train_data=onehot_data, tracking=False)
-    X = onehot_X(onehot_data)
-    preds = model.predict(X)
-
     with tempfile.TemporaryDirectory() as tmp:
-        model.save(f"{tmp}/model")
-        loaded = ModelRegistry.load(f"{tmp}/model")
+        model = RidgeRegressor(alpha=1.0)
+        model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model")
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+
+        loaded = ModelRegistry.load(f"{tmp}/model_final")
         assert isinstance(loaded, RidgeRegressor)
         np.testing.assert_array_equal(preds, loaded.predict(X))
 
 
 def test_load_mlp(onehot_data):
-    model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
-    model.train(train_data=onehot_data, tracking=False, max_epochs=5)
-    X = onehot_X(onehot_data)
-    preds = model.predict(X)
-
     with tempfile.TemporaryDirectory() as tmp:
-        model.save(f"{tmp}/model")
-        loaded = ModelRegistry.load(f"{tmp}/model")
+        model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
+        model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+
+        loaded = ModelRegistry.load(f"{tmp}/model_final")
         assert isinstance(loaded, MLPRegressor)
         np.testing.assert_array_equal(preds, loaded.predict(X))
 
 
 def test_load_cnn(tokenized_data):
-    model = CNNRegressor(
-        embed_dims=[VOCAB_SIZE, 8],
-        kernel_spec=[[3, 8, 1]],
-        seq_length=SEQ_LEN,
-        output_dim=1,
-    )
-    model.train(train_data=tokenized_data, tracking=False, max_epochs=5)
-    X = token_X(tokenized_data)
-    preds = model.predict(X)
-
     with tempfile.TemporaryDirectory() as tmp:
-        model.save(f"{tmp}/model")
-        loaded = ModelRegistry.load(f"{tmp}/model")
+        model = CNNRegressor(
+            embed_dims=[VOCAB_SIZE, 8],
+            kernel_spec=[[3, 8, 1]],
+            seq_length=SEQ_LEN,
+            output_dim=1,
+        )
+        model.train(train_data=tokenized_data, val_data=tokenized_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
+        X = token_X(tokenized_data)
+        preds = model.predict(X)
+
+        loaded = ModelRegistry.load(f"{tmp}/model_final")
         assert isinstance(loaded, CNNRegressor)
         np.testing.assert_array_equal(preds, loaded.predict(X))

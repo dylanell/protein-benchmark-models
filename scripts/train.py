@@ -1,7 +1,7 @@
 """Config-driven training script for protein benchmarking tasks.
 
-Loads preprocessed data (if available) or raw data, then trains
-the model specified in the config.
+Loads pre-split train/valid CSVs, builds the appropriate sequence dataset,
+injects data-derived shape params into the model constructor, and trains.
 
 Usage:
     uv run python scripts/train.py --config configs/fluorescence_mlp_regressor.json
@@ -11,17 +11,23 @@ import argparse
 import json
 import sys
 
+import pandas as pd
 from dotenv import load_dotenv
 
-from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.data import OneHotSequenceDataset, TokenizedSequenceDataset
 from protein_benchmark_models.models import ModelRegistry
-from protein_benchmark_models.utils import get_storage_options, seed_everything
+from protein_benchmark_models.utils import get_storage_options
 
 load_dotenv()
 
+DATASET_CLASSES = {
+    "one_hot": OneHotSequenceDataset,
+    "tokenized": TokenizedSequenceDataset,
+}
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Train a prediction model from a config.")
+    parser = argparse.ArgumentParser(description="Train a protein benchmark model from a config.")
     parser.add_argument("--config", required=True, help="Path to JSON config file")
     args = parser.parse_args()
 
@@ -37,47 +43,66 @@ def main():
             print(f"[train] Error: config missing required key '{key}'")
             sys.exit(1)
 
-    # Seed early for reproducible data splitting
     seed = config.get("seed")
-    if seed is not None:
-        seed_everything(seed)
 
-    # Load data — use preprocessed output if available, otherwise raw
+    # Load pre-split data
     data_cfg = config["data"]
-    preprocess_cfg = config.get("preprocessing", {})
-    data_path = preprocess_cfg.get("output_path", data_cfg["path"])
-    print(f"\n[train] Loading data from {data_path}")
+    train_path = data_cfg["train_path"]
+    valid_path = data_cfg["valid_path"]
 
-    storage_options = get_storage_options(data_path)
-    dataset = TabularDataset.from_csv(data_path, target_column=data_cfg["target_column"], storage_options=storage_options)
-    train_data, val_data = dataset.split(
-        test_size=data_cfg.get("test_size", 0.2),
-        random_state=seed,
-    )
+    print(f"\n[train] Loading train data from {train_path}")
+    train_df = pd.read_csv(train_path, storage_options=get_storage_options(train_path))
+    print(f"[train] Loading valid data from {valid_path}")
+    val_df = pd.read_csv(valid_path, storage_options=get_storage_options(valid_path))
 
-    # Create model
+    print(f"[train] Train size: {len(train_df)}, Valid size: {len(val_df)}")
+
+    # Compute seq_len from training sequences
+    seq_len = max(len(s) for s in train_df["sequence"])
+    print(f"[train] Max sequence length: {seq_len}")
+
+    # Build datasets
+    dataset_type = data_cfg["dataset_type"]
+    if dataset_type not in DATASET_CLASSES:
+        print(f"[train] Error: unknown dataset_type '{dataset_type}'. Choose from: {list(DATASET_CLASSES)}")
+        sys.exit(1)
+
+    DatasetClass = DATASET_CLASSES[dataset_type]
+    train_dataset = DatasetClass(train_df["sequence"].tolist(), train_df["target"].tolist(), seq_len=seq_len)
+    val_dataset = DatasetClass(val_df["sequence"].tolist(), val_df["target"].tolist(), seq_len=seq_len)
+
+    # Build model params — inject data-derived shape params and seed
     model_cfg = config["model"]
-    model = ModelRegistry.get(model_cfg["name"])(**model_cfg.get("params", {}))
+    model_params = dict(model_cfg.get("params", {}))
+    if seed is not None:
+        model_params["seed"] = seed
 
-    # Build training args — shallow copy so we don't mutate the loaded config
+    if dataset_type == "one_hot":
+        if "layer_dims" in model_params:
+            input_dim = train_dataset[0]["one_hots"].flatten().shape[0]
+            model_params["layer_dims"] = [input_dim] + model_params["layer_dims"]
+    elif dataset_type == "tokenized":
+        model_params["seq_length"] = seq_len
+
+    print(f"\n[train] Constructing model '{model_cfg['name']}' with params: {model_params}")
+    model = ModelRegistry.get(model_cfg["name"])(**model_params)
+
+    # Build training args
     train_cfg = dict(config["training"])
     experiment_name = train_cfg.pop("experiment_name")
     run_name = train_cfg.pop("run_name", None)
     model_path = train_cfg.pop("model_path", None)
 
-    # Flatten data + preprocessing config for MLflow logging
     extra_params = {f"data.{k}": v for k, v in data_cfg.items()}
-    extra_params.update({f"preprocessing.{k}": v for k, v in preprocess_cfg.items()})
+    extra_params["data.seq_len"] = seq_len
 
-    # Everything remaining is model-specific training kwargs
     model.train(
         experiment_name=experiment_name,
-        train_data=train_data,
-        val_data=val_data,
+        train_data=train_dataset,
+        val_data=val_dataset,
         run_name=run_name,
         model_path=model_path,
         extra_params=extra_params,
-        seed=seed,
         **train_cfg,
     )
 

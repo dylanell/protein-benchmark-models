@@ -1,9 +1,8 @@
 """Tests for model implementations.
 
 Each model has two tests:
-- test_lifecycle: train, predict (check output shape), save to temp dir, verify
-  artifact structure (config.json + weights file), load into fresh instance,
-  confirm predictions match exactly.
+- test_lifecycle: train (with model_path), verify artifact structure, load into
+  fresh instance, confirm predictions match exactly.
 - test_get_params: verify get_params() returns expected keys and values.
 """
 
@@ -23,24 +22,23 @@ N = len(SEQUENCES)  # 8
 
 class TestRidgeRegressor:
     def test_lifecycle(self, onehot_data):
-        model = RidgeRegressor(alpha=1.0)
-        model.train(train_data=onehot_data, tracking=False)
-
-        X = onehot_X(onehot_data)
-        preds = model.predict(X)
-        assert preds.shape == (N,)
-
         with tempfile.TemporaryDirectory() as tmp:
-            saved_path = model.save(f"{tmp}/model")
-            assert os.path.isdir(saved_path)
-            assert os.path.exists(f"{tmp}/model/config.json")
-            assert os.path.exists(f"{tmp}/model/model.joblib")
+            model = RidgeRegressor(alpha=1.0)
+            model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model")
 
-            with open(f"{tmp}/model/config.json") as f:
+            assert os.path.isdir(f"{tmp}/model_final")
+            assert os.path.exists(f"{tmp}/model_final/config.json")
+            assert os.path.exists(f"{tmp}/model_final/model.joblib")
+
+            with open(f"{tmp}/model_final/config.json") as f:
                 config = json.load(f)
             assert config["model_name"] == "ridge_regressor"
 
-            model2 = RidgeRegressor.load(f"{tmp}/model")
+            X = onehot_X(onehot_data)
+            preds = model.predict(X)
+            assert preds.shape == (N,)
+
+            model2 = RidgeRegressor.load(f"{tmp}/model_final")
             preds2 = model2.predict(X)
             np.testing.assert_array_equal(preds, preds2)
 
@@ -52,25 +50,24 @@ class TestRidgeRegressor:
 
 class TestMLPRegressor:
     def test_lifecycle(self, onehot_data):
-        model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
-        model.train(train_data=onehot_data, tracking=False, max_epochs=5)
-
-        X = onehot_X(onehot_data)
-        preds = model.predict(X)
-        assert preds.shape == (N,)
-
         with tempfile.TemporaryDirectory() as tmp:
-            saved_path = model.save(f"{tmp}/model")
-            assert os.path.isdir(saved_path)
-            assert os.path.exists(f"{tmp}/model/config.json")
-            assert os.path.exists(f"{tmp}/model/model.pt")
+            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
+            model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
 
-            with open(f"{tmp}/model/config.json") as f:
+            assert os.path.isdir(f"{tmp}/model_final")
+            assert os.path.exists(f"{tmp}/model_final/config.json")
+            assert os.path.exists(f"{tmp}/model_final/model.pt")
+
+            with open(f"{tmp}/model_final/config.json") as f:
                 config = json.load(f)
             assert config["model_name"] == "mlp_regressor"
             assert config["model_params"]["layer_dims"] == [SEQ_LEN * VOCAB_SIZE, 16, 1]
 
-            model2 = MLPRegressor.load(f"{tmp}/model")
+            X = onehot_X(onehot_data)
+            preds = model.predict(X)
+            assert preds.shape == (N,)
+
+            model2 = MLPRegressor.load(f"{tmp}/model_final")
             preds2 = model2.predict(X)
             np.testing.assert_array_equal(preds, preds2)
 
@@ -89,31 +86,30 @@ class TestCNNRegressor:
     EMBED_DIMS = [VOCAB_SIZE, 8]
 
     def test_lifecycle(self, tokenized_data):
-        model = CNNRegressor(
-            embed_dims=self.EMBED_DIMS,
-            kernel_spec=self.KERNEL_SPEC,
-            seq_length=SEQ_LEN,
-            output_dim=1,
-        )
-        model.train(train_data=tokenized_data, tracking=False, max_epochs=5)
-
-        X = token_X(tokenized_data)
-        preds = model.predict(X)
-        assert preds.shape == (N,)
-
         with tempfile.TemporaryDirectory() as tmp:
-            saved_path = model.save(f"{tmp}/model")
-            assert os.path.isdir(saved_path)
-            assert os.path.exists(f"{tmp}/model/config.json")
-            assert os.path.exists(f"{tmp}/model/model.pt")
+            model = CNNRegressor(
+                embed_dims=self.EMBED_DIMS,
+                kernel_spec=self.KERNEL_SPEC,
+                seq_length=SEQ_LEN,
+                output_dim=1,
+            )
+            model.train(train_data=tokenized_data, val_data=tokenized_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
 
-            with open(f"{tmp}/model/config.json") as f:
+            assert os.path.isdir(f"{tmp}/model_final")
+            assert os.path.exists(f"{tmp}/model_final/config.json")
+            assert os.path.exists(f"{tmp}/model_final/model.pt")
+
+            with open(f"{tmp}/model_final/config.json") as f:
                 config = json.load(f)
             assert config["model_name"] == "cnn_regressor"
             assert config["model_params"]["embed_dims"] == self.EMBED_DIMS
             assert config["model_params"]["kernel_spec"] == self.KERNEL_SPEC
 
-            model2 = CNNRegressor.load(f"{tmp}/model")
+            X = token_X(tokenized_data)
+            preds = model.predict(X)
+            assert preds.shape == (N,)
+
+            model2 = CNNRegressor.load(f"{tmp}/model_final")
             preds2 = model2.predict(X)
             np.testing.assert_array_equal(preds, preds2)
 

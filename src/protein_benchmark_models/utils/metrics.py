@@ -6,10 +6,8 @@ import numpy as np
 from sklearn.metrics import r2_score
 from scipy.stats import spearmanr
 
-from protein_benchmark_models.models.base import BaseModel
 
-
-def evaluate(model: BaseModel, X: np.ndarray, y: np.ndarray) -> dict:
+def evaluate(model, X: np.ndarray, y: np.ndarray) -> dict:
     """Compute regression metrics for a model on a pre-built input array.
 
     Args:
