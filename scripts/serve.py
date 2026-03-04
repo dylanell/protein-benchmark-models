@@ -15,7 +15,7 @@ import sys
 import uvicorn
 from dotenv import load_dotenv
 
-from ml_project_template.serving.app import create_app
+from protein_benchmark_models.serving.app import create_app
 
 load_dotenv()
 

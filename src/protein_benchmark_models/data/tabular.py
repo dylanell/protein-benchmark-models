@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset
 
-from ml_project_template.data.base import BaseDataset
+from protein_benchmark_models.data.base import BaseDataset
 
 
 @dataclass

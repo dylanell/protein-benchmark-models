@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Notes
+
+At the end of each session, write a session notes file to `.claude/session_notes_<N>.md`
+at the project root, where N is the next session number. Follow the style of existing
+notes in that directory. Capture: what was done, state at end of session, and TODOs for
+next session.
+
+Note: `.claude/` is gitignored (see `.gitignore`), so session notes are local only.
+
+## Gitignored Directories
+
+The following project-specific paths are gitignored:
+- `.claude/` — Claude session notes and local AI context
+- `.data/` — raw and processed datasets
+- `.models/` — saved model artifacts
+- `mlruns/`, `mlartifacts/`, `mlflow.db` — MLflow local tracking
+
 ## Project Overview
 
 ML project template for model R&D and API serving. Uses uv for package management with Python 3.11+.
@@ -110,8 +127,8 @@ notebooks/                   # R&D notebooks
 
 ### Data Loading
 ```python
-from ml_project_template.data import TabularDataset
-from ml_project_template.utils import get_storage_options
+from protein_benchmark_models.data import TabularDataset
+from protein_benchmark_models.utils import get_storage_options
 
 dataset = TabularDataset.from_csv("s3://data/iris/iris.csv", target_column="species", storage_options=get_storage_options("s3://data/iris/iris.csv"))
 train_data, test_data = dataset.split(test_size=0.2, random_state=42)
@@ -119,7 +136,7 @@ train_data, test_data = dataset.split(test_size=0.2, random_state=42)
 
 ### Model Registry
 ```python
-from ml_project_template.models import ModelRegistry
+from protein_benchmark_models.models import ModelRegistry
 ModelRegistry.list()  # ['gb_classifier', 'mlp_classifier']
 model = ModelRegistry.get("mlp_classifier")(layer_dims=[4, 16, 3])
 

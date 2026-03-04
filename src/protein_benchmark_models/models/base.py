@@ -14,7 +14,7 @@ import numpy as np
 
 import mlflow
 
-from ml_project_template.data import BaseDataset
+from protein_benchmark_models.data import BaseDataset
 
 
 class BaseModel(ABC):
@@ -127,7 +127,7 @@ class BaseModel(ABC):
         # Seed Python, NumPy, and PyTorch random number generators before training
         # so that weight initialisation, data shuffling, and dropout are all reproducible.
         if seed is not None:
-            from ml_project_template.utils import seed_everything
+            from protein_benchmark_models.utils import seed_everything
             seed_everything(seed)
 
         # Resolve the local path that _fit() will use for checkpointing.
@@ -165,7 +165,7 @@ class BaseModel(ABC):
                 if model_path and save_model is None:
                     self.save(model_path)
                 elif save_model is not None and checkpoint_path != model_path:
-                    from ml_project_template.utils import get_s3_filesystem
+                    from protein_benchmark_models.utils import get_s3_filesystem
                     get_s3_filesystem().put(checkpoint_path, model_path, recursive=True)
                 return
 
@@ -199,7 +199,7 @@ class BaseModel(ABC):
                 if model_path:
                     if save_model is not None:
                         if checkpoint_path != model_path:
-                            from ml_project_template.utils import get_s3_filesystem
+                            from protein_benchmark_models.utils import get_s3_filesystem
                             get_s3_filesystem().put(checkpoint_path, model_path, recursive=True)
                         mlflow.log_artifact(checkpoint_path)
                     elif model_path.startswith("s3://"):
@@ -212,7 +212,7 @@ class BaseModel(ABC):
 
     def _save_to_s3(self, s3_path: str, tmp_dir: str) -> str:
         """Save model to a temp dir, upload to S3, return local path for MLflow logging."""
-        from ml_project_template.utils import get_s3_filesystem
+        from protein_benchmark_models.utils import get_s3_filesystem
         fs = get_s3_filesystem()
         local_path = os.path.join(tmp_dir, os.path.basename(s3_path))
         saved_path = self.save(local_path)
@@ -231,7 +231,7 @@ class BaseModel(ABC):
 
     def save(self, path: str) -> str:
         """Save model to a directory with config.json and weights. Returns the directory path."""
-        from ml_project_template.models.registry import ModelRegistry
+        from protein_benchmark_models.models.registry import ModelRegistry
 
         os.makedirs(path, exist_ok=True)
 

@@ -1,41 +1,42 @@
-"""PyTorch MLP classifier."""
+"""PyTorch MLP regressor."""
 
 from __future__ import annotations
 
-from typing import Union, Any, Optional, List, Literal
+from typing import Literal, Any
 
 import os
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import lightning as L
 from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from ml_project_template.data import TabularDataset
-from ml_project_template.models.base import BaseModel
-from ml_project_template.modules.fully_connected import FullyConnected
+from protein_benchmark_models.data import OneHotSequenceDataset
+from protein_benchmark_models.models.base import BaseModel
+from protein_benchmark_models.modules.fully_connected import FullyConnected
 
 
-class MLPClassifier(BaseModel):
-    """Simple 2-layer MLP classifier."""
+class MLPRegressor(BaseModel):
+    """MLP regressor backed by a FullyConnected module."""
 
     def __init__(
         self,
-        layer_dims: List[int],
+        layer_dims: list[int],
         hidden_activation: str = "ReLU",
         output_activation: str = "Identity",
         use_bias: bool = True,
         norm: Literal["batch", "layer"] | None = None,
-        accelerator: Union[str, Accelerator] = "auto",
-        strategy: Union[str, Strategy] = "auto",
-        devices: Union[list[int], str, int] = "auto",
-        precision: Union[str, int] = "32-true",
-        plugins: Optional[Union[str, Any]] = None,
-        callbacks: Optional[Union[list[Any], Any]] = None,
-        loggers: Optional[Union[Logger, list[Logger]]] = None
+        accelerator: str | Accelerator = "auto",
+        strategy: str | Strategy = "auto",
+        devices: list[int] | str | int = "auto",
+        precision: str | int = "32-true",
+        plugins: str | Any | None = None,
+        callbacks: list[Any] | Any | None = None,
+        loggers: Logger | list[Logger] | None = None
     ):
         super().__init__()
 
@@ -58,12 +59,12 @@ class MLPClassifier(BaseModel):
             norm=norm,
         )
 
-        self.loss_fcn = nn.CrossEntropyLoss()
+        self.loss_fcn = nn.MSELoss()
 
     def _fit(
         self,
-        train_data: TabularDataset,
-        val_data: Optional[TabularDataset] = None,
+        train_data: OneHotSequenceDataset,
+        val_data: OneHotSequenceDataset | None = None,
         *,
         lr: float = 1e-3,
         weight_decay: float = 0.0,
@@ -71,23 +72,31 @@ class MLPClassifier(BaseModel):
         max_epochs: int = 100,
         val_frequency: int = 1,
         patience: int = -1,
-        save_model: Optional[str] = None,
-        model_path: Optional[str] = None,
+        save_model: str | None = None,
+        model_path: str | None = None,
     ) -> None:
         if patience > 0 and val_data is None:
             raise ValueError("Patience requires a validation dataset.")
         if save_model == "best" and val_data is None:
             raise ValueError("save_model='best' requires a validation dataset.")
 
+        # Log training parameters before training starts
+        self.log_param("lr", lr)
+        self.log_param("weight_decay", weight_decay)
+        self.log_param("batch_size", batch_size)
+        self.log_param("max_epochs", max_epochs)
+        self.log_param("val_frequency", val_frequency)
+        self.log_param("patience", patience)
+
         # Initialize optimizer and fabric
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         model, optimizer = self.fabric.setup(self.model, optimizer)
 
         # Initialize dataloaders
-        train_dataloader = train_data.to_pytorch(batch_size=batch_size, shuffle=True)
+        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
         train_dataloader = self.fabric.setup_dataloaders(train_dataloader)
         if val_data is not None:
-            val_dataloader = val_data.to_pytorch(batch_size=batch_size, shuffle=False)
+            val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
             val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
 
         epochs_without_improvement = 0
@@ -99,10 +108,12 @@ class MLPClassifier(BaseModel):
             # Train
             cum_train_loss = 0
             model.train()
-            for X_batch, y_batch in train_dataloader:
+            for batch in train_dataloader:
+                X = batch["one_hots"].flatten(start_dim=1)
+                y = batch["target"]
                 optimizer.zero_grad()
-                output = model(X_batch)
-                loss = self.loss_fcn(output, y_batch)
+                output = model(X).squeeze()
+                loss = torch.sqrt(self.loss_fcn(output, y))
                 self.fabric.backward(loss)
                 optimizer.step()
                 cum_train_loss += loss.item()
@@ -115,9 +126,11 @@ class MLPClassifier(BaseModel):
                 cum_val_loss = 0
                 model.eval()
                 with torch.no_grad():
-                    for X_batch, y_batch in val_dataloader:
-                        output = model(X_batch)
-                        loss = self.loss_fcn(output, y_batch)
+                    for batch in val_dataloader:
+                        X = batch["one_hots"].flatten(start_dim=1)
+                        y = batch["target"]
+                        output = model(X).squeeze()
+                        loss = torch.sqrt(self.loss_fcn(output, y))
                         cum_val_loss += loss.item()
                 val_loss = cum_val_loss / len(val_dataloader)
 
@@ -139,16 +152,20 @@ class MLPClassifier(BaseModel):
                 f"val_loss: {val_loss:.4f} | best_val_loss: {best_val_loss:.4f}"
             pbar.set_description(status)
 
+        # Final validation metrics
+        if val_data is not None:
+            from protein_benchmark_models.utils import evaluate
+            X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
+            y = val_data.targets.numpy()
+            metrics = evaluate(self, X, y)
+            for k, v in metrics.items():
+                self.log_metric(f"val_{k}", v)
+            print(f"[mlp_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+            print(f"[mlp_regressor] Valid R2: {metrics['r2']:.04f}")
+            print(f"[mlp_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
+
         if save_model == "final":
             self.save(model_path)
-
-        # Log training parameters
-        self.log_param("lr", lr)
-        self.log_param("weight_decay", weight_decay)
-        self.log_param("batch_size", batch_size)
-        self.log_param("max_epochs", max_epochs)
-        self.log_param("val_frequency", val_frequency)
-        self.log_param("patience", patience)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Run inference. Returns raw model output as numpy array."""
@@ -156,7 +173,7 @@ class MLPClassifier(BaseModel):
         X_tensor = torch.from_numpy(X).float().to(self.fabric.device)
         with torch.no_grad():
             output = self.model(X_tensor)
-        return output.cpu().numpy()
+        return output.squeeze(-1).cpu().numpy()
 
     def _save_weights(self, dir_path: str) -> None:
         """Save model state dict to directory."""
@@ -166,4 +183,3 @@ class MLPClassifier(BaseModel):
         """Load model state dict from directory."""
         state = {"model": self.model}
         self.fabric.load(os.path.join(dir_path, "model.pt"), state)
-        

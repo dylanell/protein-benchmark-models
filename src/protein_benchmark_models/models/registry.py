@@ -5,17 +5,19 @@ from __future__ import annotations
 import json
 import os
 
-from ml_project_template.models.base import BaseModel
-from ml_project_template.models.gb_classifier import GBClassifier
-from ml_project_template.models.mlp_classifier import MLPClassifier
+from protein_benchmark_models.models.base import BaseModel
+from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
+from protein_benchmark_models.models.mlp_regressor import MLPRegressor
+from protein_benchmark_models.models.cnn_regressor import CNNRegressor
 
 
 class ModelRegistry:
     """Registry for model classes."""
 
     _models: dict[str, type[BaseModel]] = {
-        "gb_classifier": GBClassifier,
-        "mlp_classifier": MLPClassifier
+        "ridge_regressor": RidgeRegressor,
+        "mlp_regressor": MLPRegressor,
+        "cnn_regressor": CNNRegressor
     }
 
     @classmethod

@@ -1,12 +1,10 @@
 """Tests for model implementations.
 
 Each model has two tests:
-- test_lifecycle: Full roundtrip — create model, train (with tracking=False to
-  skip MLflow), predict (check output shape), save to a temp directory, verify
-  the directory-based artifact structure (config.json + weights file), load into
-  a fresh instance, and confirm predictions match exactly.
-- test_get_params: Verify that get_params() returns the expected keys and values,
-  including both model-specific args and inherited defaults (e.g. Fabric args).
+- test_lifecycle: train, predict (check output shape), save to temp dir, verify
+  artifact structure (config.json + weights file), load into fresh instance,
+  confirm predictions match exactly.
+- test_get_params: verify get_params() returns expected keys and values.
 """
 
 import json
@@ -15,108 +13,120 @@ import tempfile
 
 import numpy as np
 
-from ml_project_template.models.mlp_classifier import MLPClassifier
-from ml_project_template.models.gb_classifier import GBClassifier
+from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
+from protein_benchmark_models.models.mlp_regressor import MLPRegressor
+from protein_benchmark_models.models.cnn_regressor import CNNRegressor
+from tests.conftest import SEQ_LEN, SEQUENCES, VOCAB_SIZE, onehot_X, token_X
+
+N = len(SEQUENCES)  # 8
 
 
-class TestMLPClassifier:
-    def test_lifecycle(self, iris_tiny):
-        # Create model: 4 input features → 8 hidden units → 3 output classes
-        model = MLPClassifier(layer_dims=[4, 8, 3],
-            hidden_activation="ReLU",
-            output_activation="Identity",
-            use_bias=True
-        )
+class TestRidgeRegressor:
+    def test_lifecycle(self, onehot_data):
+        model = RidgeRegressor(alpha=1.0)
+        model.train(train_data=onehot_data, tracking=False)
 
-        # Train with tracking=False to avoid needing an MLflow server
-        model.train(
-            train_data=iris_tiny,
-            tracking=False,
-            max_epochs=5,
-        )
-
-        # MLP returns raw logits — shape is (num_samples, num_classes)
-        preds = model.predict(iris_tiny.X)
-        assert preds.shape == (20, 3)
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
 
         with tempfile.TemporaryDirectory() as tmp:
             saved_path = model.save(f"{tmp}/model")
-
-            # save() should create a directory with config.json and model.pt
-            assert os.path.isdir(saved_path)
-            assert os.path.exists(f"{tmp}/model/config.json")
-            assert os.path.exists(f"{tmp}/model/model.pt")
-
-            # config.json should contain the model name and init params
-            with open(f"{tmp}/model/config.json") as f:
-                config = json.load(f)
-            assert config["model_name"] == "mlp_classifier"
-            assert config["model_params"]["layer_dims"] == [4, 8, 3]
-            assert config["model_params"]["hidden_activation"] == "ReLU"
-            assert config["model_params"]["output_activation"] == "Identity"
-
-            model2 = MLPClassifier.load(f"{tmp}/model")
-
-            preds2 = model2.predict(iris_tiny.X)
-            np.testing.assert_array_equal(preds, preds2)
-
-    def test_get_params(self):
-        """Verify auto-captured __init__ params include both architecture and Fabric args."""
-        model = MLPClassifier(
-            layer_dims=[4, 16, 3],
-            hidden_activation="ReLU",
-            output_activation="Identity",
-            use_bias=True
-        )
-        params = model.get_params()
-        # Architecture params
-        assert params["layer_dims"] == [4, 16, 3]
-        assert params["hidden_activation"] == "ReLU"
-        assert params["output_activation"] == "Identity"
-        assert params["use_bias"] == True
-        # Inherited Fabric default
-        assert params["accelerator"] == "auto"
-
-
-class TestGBClassifier:
-    def test_lifecycle(self, iris_tiny):
-        model = GBClassifier(n_estimators=10, max_depth=2)
-
-        # Train with tracking=False to avoid needing an MLflow server
-        model.train(
-            train_data=iris_tiny,
-            tracking=False,
-        )
-
-        # GB returns class labels — shape is (num_samples,) with values in {0, 1, 2}
-        preds = model.predict(iris_tiny.X)
-        assert preds.shape == (20,)
-        assert set(preds).issubset({0, 1, 2})
-
-        with tempfile.TemporaryDirectory() as tmp:
-            saved_path = model.save(f"{tmp}/model")
-
-            # save() should create a directory with config.json and model.joblib
             assert os.path.isdir(saved_path)
             assert os.path.exists(f"{tmp}/model/config.json")
             assert os.path.exists(f"{tmp}/model/model.joblib")
 
-            # config.json should contain the model name and init params
             with open(f"{tmp}/model/config.json") as f:
                 config = json.load(f)
-            assert config["model_name"] == "gb_classifier"
-            assert config["model_params"]["n_estimators"] == 10
-            assert config["model_params"]["max_depth"] == 2
+            assert config["model_name"] == "ridge_regressor"
 
-            model2 = GBClassifier.load(f"{tmp}/model")
-
-            preds2 = model2.predict(iris_tiny.X)
+            model2 = RidgeRegressor.load(f"{tmp}/model")
+            preds2 = model2.predict(X)
             np.testing.assert_array_equal(preds, preds2)
 
     def test_get_params(self):
-        """Verify sklearn's get_params() returns the expected hyperparameters."""
-        model = GBClassifier(n_estimators=50, max_depth=3, learning_rate=0.05)
+        model = RidgeRegressor(alpha=2.0)
         params = model.get_params()
-        assert params["n_estimators"] == 50
-        assert params["max_depth"] == 3
-        assert params["learning_rate"] == 0.05
+        assert params["alpha"] == 2.0
+
+
+class TestMLPRegressor:
+    def test_lifecycle(self, onehot_data):
+        model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
+        model.train(train_data=onehot_data, tracking=False, max_epochs=5)
+
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_path = model.save(f"{tmp}/model")
+            assert os.path.isdir(saved_path)
+            assert os.path.exists(f"{tmp}/model/config.json")
+            assert os.path.exists(f"{tmp}/model/model.pt")
+
+            with open(f"{tmp}/model/config.json") as f:
+                config = json.load(f)
+            assert config["model_name"] == "mlp_regressor"
+            assert config["model_params"]["layer_dims"] == [SEQ_LEN * VOCAB_SIZE, 16, 1]
+
+            model2 = MLPRegressor.load(f"{tmp}/model")
+            preds2 = model2.predict(X)
+            np.testing.assert_array_equal(preds, preds2)
+
+    def test_get_params(self):
+        model = MLPRegressor(layer_dims=[176, 16, 1], hidden_activation="ReLU")
+        params = model.get_params()
+        assert params["layer_dims"] == [176, 16, 1]
+        assert params["hidden_activation"] == "ReLU"
+        assert params["accelerator"] == "auto"
+
+
+class TestCNNRegressor:
+    # Single conv layer: kernel_height=3, out_channels=8, stride=1
+    # Output seq_len = (SEQ_LEN - 3) // 1 + 1 = 6
+    KERNEL_SPEC = [[3, 8, 1]]
+    EMBED_DIMS = [VOCAB_SIZE, 8]
+
+    def test_lifecycle(self, tokenized_data):
+        model = CNNRegressor(
+            embed_dims=self.EMBED_DIMS,
+            kernel_spec=self.KERNEL_SPEC,
+            seq_length=SEQ_LEN,
+            output_dim=1,
+        )
+        model.train(train_data=tokenized_data, tracking=False, max_epochs=5)
+
+        X = token_X(tokenized_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_path = model.save(f"{tmp}/model")
+            assert os.path.isdir(saved_path)
+            assert os.path.exists(f"{tmp}/model/config.json")
+            assert os.path.exists(f"{tmp}/model/model.pt")
+
+            with open(f"{tmp}/model/config.json") as f:
+                config = json.load(f)
+            assert config["model_name"] == "cnn_regressor"
+            assert config["model_params"]["embed_dims"] == self.EMBED_DIMS
+            assert config["model_params"]["kernel_spec"] == self.KERNEL_SPEC
+
+            model2 = CNNRegressor.load(f"{tmp}/model")
+            preds2 = model2.predict(X)
+            np.testing.assert_array_equal(preds, preds2)
+
+    def test_get_params(self):
+        model = CNNRegressor(
+            embed_dims=self.EMBED_DIMS,
+            kernel_spec=self.KERNEL_SPEC,
+            seq_length=SEQ_LEN,
+            output_dim=1,
+        )
+        params = model.get_params()
+        assert params["embed_dims"] == self.EMBED_DIMS
+        assert params["kernel_spec"] == self.KERNEL_SPEC
+        assert params["seq_length"] == SEQ_LEN
+        assert params["output_dim"] == 1
+        assert params["accelerator"] == "auto"
