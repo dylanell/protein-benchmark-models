@@ -1,9 +1,21 @@
 """Download protein benchmark datasets to a local directory or S3 prefix.
 
-Usage:
+TAPE tasks (one fixed train/valid/test split):
     uv run python scripts/onboard.py --task fluorescence
     uv run python scripts/onboard.py --task stability
     uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
+
+FLIP2 tasks (multiple named splits, each gets its own subdirectory):
+    uv run python scripts/onboard.py --task amylase
+    uv run python scripts/onboard.py --task ired
+    uv run python scripts/onboard.py --task nucb
+    uv run python scripts/onboard.py --task hydro
+    uv run python scripts/onboard.py --task rhomax
+
+Output structure for FLIP2:
+    .data/<task>/<split>/train.csv
+    .data/<task>/<split>/valid.csv
+    .data/<task>/<split>/test.csv
 """
 
 import argparse
@@ -21,8 +33,9 @@ from protein_benchmark_models.utils import get_s3_filesystem
 load_dotenv()
 
 TAPE_BASE = "http://s3.amazonaws.com/songlabdata/proteindata/data_raw_pytorch"
+ZENODO_BASE = "https://zenodo.org/records/18433203/files"
 
-TASKS = {
+TAPE_TASKS = {
     "fluorescence": {
         "url": f"{TAPE_BASE}/fluorescence.tar.gz",
         "target_field": "log_fluorescence",
@@ -33,6 +46,14 @@ TASKS = {
         "target_field": "stability_score",
         "extra_fields": [],
     },
+}
+
+FLIP2_TASKS = {
+    "amylase": ["one_to_many", "close_to_far", "far_to_close", "by_mutation", "random_split"],
+    "ired":    ["two_to_many", "random"],
+    "nucb":    ["two_to_many", "random"],
+    "hydro":   ["three_to_many", "low_to_high", "to_P06241", "to_P0A9X9", "to_P01053", "random_split"],
+    "rhomax":  ["by_wild_type"],
 }
 
 SPLITS = ["train", "valid", "test"]
@@ -86,7 +107,7 @@ def write_df(df: pd.DataFrame, path: str) -> None:
 
 def onboard_tape_task(task_name: str, dest: str) -> None:
     """Download and extract a TAPE task, writing one CSV per split."""
-    task = TASKS[task_name]
+    task = TAPE_TASKS[task_name]
     url = task["url"]
     target_field = task["target_field"]
     extra_fields = task["extra_fields"]
@@ -106,12 +127,43 @@ def onboard_tape_task(task_name: str, dest: str) -> None:
             print(f"Saved {split}.csv ({len(df):,} rows) → {out_path}")
 
 
+def onboard_flip2_task(task_name: str, dest: str) -> None:
+    """Download all splits for a FLIP2 task, writing train/valid/test CSVs per split.
+
+    Each split is fetched as a .csv.gz from Zenodo and written to:
+        <dest>/<split>/train.csv   — set=="train" and validation==False
+        <dest>/<split>/valid.csv   — set=="train" and validation==True
+        <dest>/<split>/test.csv    — set=="test"
+    """
+    splits = FLIP2_TASKS[task_name]
+    dest = dest.rstrip("/")
+
+    for split in splits:
+        url = f"{ZENODO_BASE}/{task_name}/{split}.csv.gz?download=1"
+        print(f"Downloading {task_name}/{split} from {url} ...")
+        with urllib.request.urlopen(url) as response:
+            data = response.read()
+        print(f"Downloaded {len(data) / 1_000_000:.1f} MB")
+
+        df = pd.read_csv(io.BytesIO(data), compression="gzip")
+
+        train_df = df[(df["set"] == "train") & ~df["validation"]][["sequence", "target"]].reset_index(drop=True)
+        valid_df = df[(df["set"] == "train") &  df["validation"]][["sequence", "target"]].reset_index(drop=True)
+        test_df  = df[ df["set"] == "test"                      ][["sequence", "target"]].reset_index(drop=True)
+
+        split_dest = f"{dest}/{split}"
+        for split_name, split_df in [("train", train_df), ("valid", valid_df), ("test", test_df)]:
+            out_path = f"{split_dest}/{split_name}.csv"
+            write_df(split_df, out_path)
+            print(f"Saved {split_name}.csv ({len(split_df):,} rows) → {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download protein benchmark datasets.")
     parser.add_argument(
         "--task",
         required=True,
-        choices=list(TASKS.keys()),
+        choices=list(TAPE_TASKS.keys()) + list(FLIP2_TASKS.keys()),
         help="Task to download",
     )
     parser.add_argument(
@@ -121,8 +173,12 @@ def main():
     )
     args = parser.parse_args()
 
-    dest = args.dest if args.dest is not None else f".data/{args.task}"
-    onboard_tape_task(args.task, dest)
+    if args.task in TAPE_TASKS:
+        dest = args.dest if args.dest is not None else f".data/tape/{args.task}"
+        onboard_tape_task(args.task, dest)
+    else:
+        dest = args.dest if args.dest is not None else f".data/flip2/{args.task}"
+        onboard_flip2_task(args.task, dest)
 
 
 if __name__ == "__main__":

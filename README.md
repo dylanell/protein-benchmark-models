@@ -4,8 +4,9 @@ Template for machine learning (ML) projects and API serving.
 
 ## TODO
 
-- [ ] Add 1D CNN baseline model over tokenized sequences
+- [x] Add 1D CNN baseline model over tokenized sequences
 - [ ] Onboard FLIP2 GB1 task and run baselines
+- [ ] Update README and remove stale sections (from original template). 
 
 ## Using This Template
 
@@ -37,8 +38,8 @@ uv pip install -e "." --group dev
 
 Configure VSCode notebooks (add to .vscode/settings.json)
 ```
-{                                                                                                                                                           
-  "jupyter.notebookFileRoot": "${workspaceFolder}"                                                                                                          
+{
+  "jupyter.notebookFileRoot": "${workspaceFolder}"
 }
 ```
 
