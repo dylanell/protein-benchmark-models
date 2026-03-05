@@ -1,8 +1,8 @@
 {
     "seed": 42,
     "data": {
-        "train_path": ".data/flip2/amylase/random_split/train.csv",
-        "valid_path": ".data/flip2/amylase/random_split/valid.csv",
+        "train_path": "s3://data/tape/fluorescence/train.csv",
+        "valid_path": "s3://data/tape/fluorescence/valid.csv",
         "dataset_type": "one_hot"
     },
     "model": {
@@ -19,15 +19,15 @@
         }
     },
     "training": {
-        "experiment_name": "flip2_amylase_random_split_regression",
+        "experiment_name": "tape_fluorescence_regression",
         "run_name": null,
-        "model_path": ".models/flip2_amylase_random_split_mlp_regressor",
+        "model_path": "s3://models/tape_fluorescence_mlp_regressor",
         "lr": 0.0001,
         "weight_decay": 0.01,
         "max_epochs": 5,
         "batch_size": 256,
         "val_frequency": 1,
         "patience": 25,
-        "tracking": true
+        "tracking": false
     }
 }

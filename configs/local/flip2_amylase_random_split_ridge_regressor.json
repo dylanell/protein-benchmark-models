@@ -15,6 +15,6 @@
         "experiment_name": "flip2_amylase_random_split_regression",
         "run_name": null,
         "model_path": ".models/flip2_amylase_random_split_ridge_regressor",
-        "tracking": true
+        "tracking": false
     }
 }

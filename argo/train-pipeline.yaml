@@ -7,7 +7,7 @@ spec:
   arguments:
     parameters:
       - name: config
-        value: configs/tape_fluorescence_mlp_regressor.json
+        value: configs/remote/tape_fluorescence_mlp_regressor.json
   templates:
     - name: train
       inputs:

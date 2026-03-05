@@ -1,8 +1,8 @@
 {
     "seed": 42,
     "data": {
-        "train_path": ".data/tape/fluorescence/train.csv",
-        "valid_path": ".data/tape/fluorescence/valid.csv",
+        "train_path": "s3://data/tape/fluorescence/train.csv",
+        "valid_path": "s3://data/tape/fluorescence/valid.csv",
         "dataset_type": "one_hot"
     },
     "model": {

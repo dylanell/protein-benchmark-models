@@ -42,32 +42,19 @@ uv run python scripts/onboard.py --task amylase
 # Run scripts/notebooks
 uv run jupyter notebook
 
-# Train a model from config
-uv run python scripts/train.py --config configs/tape_fluorescence_ridge_regressor.json
-uv run python scripts/train.py --config configs/tape_fluorescence_mlp_regressor.json
+# Train a model locally
+uv run python scripts/train.py --config configs/local/tape_fluorescence_ridge_regressor.json
+uv run python scripts/train.py --config configs/local/tape_fluorescence_mlp_regressor.json
+
+# Train remotely on GPU via Modal (reads data from MinIO, logs to MLflow)
+uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
 
 # Serve a trained model
-uv run python scripts/serve.py --config configs/tape_fluorescence_mlp_regressor.json
+uv run python scripts/serve.py --config configs/local/tape_fluorescence_mlp_regressor.json
 
-# Docker
-docker build -t training-job -f docker/train/Dockerfile .
-docker build -t serving-job -f docker/serve/Dockerfile .
-
-# S3 and MLflow endpoints are read from .env
-docker run --env-file .env \
-  -v $(pwd)/configs:/app/configs \
-  training-job --config configs/tape_fluorescence_mlp_regressor.json
-
-# Argo Workflows — first-time setup
-kubectl create namespace argo
-kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
-source .env && kubectl create secret generic s3-credentials --namespace argo \
-  --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-kubectl create configmap training-configs --namespace argo --from-file=configs/
-
-# Argo Workflows — run pipeline (preprocess → train)
-argo submit -n argo argo/train-pipeline.yaml --watch
+# Argo Workflows — run training on GKE (see argo/README.md for full setup)
+argo submit -n argo argo/train-pipeline.yaml \
+  -p config=configs/remote/tape_fluorescence_mlp_regressor.json --watch
 ```
 
 ## Architecture
@@ -95,7 +82,9 @@ src/protein_benchmark_models/
     ├── metrics.py           # evaluate() — RMSE, R2, SpearmanR
     └── seed.py              # seed_everything() for reproducibility
 
-configs/                     # Training configs (JSON)
+configs/
+├── local/               # Configs with local .data/ paths (local training)
+└── remote/              # Configs with s3:// paths (Modal, GKE)
 docker/                      # Dockerfiles per pipeline stage
 ├── train/Dockerfile         # Training image
 └── serve/Dockerfile         # Serving image

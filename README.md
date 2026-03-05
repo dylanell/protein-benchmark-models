@@ -54,7 +54,9 @@ src/protein_benchmark_models/
     ├── metrics.py                 # evaluate() — RMSE, R2, SpearmanR
     └── seed.py                    # seed_everything() for reproducibility
 
-configs/                           # Training configs (JSON)
+configs/
+├── local/                         # Configs with local .data/ paths (local training)
+└── remote/                        # Configs with s3:// paths (Modal, GKE)
 docker/                            # Dockerfiles per pipeline stage
 scripts/                           # Data onboarding and pipeline entry points
 notebooks/                         # R&D notebooks
@@ -326,40 +328,35 @@ docker build -t train-job -f docker/train/Dockerfile .
 docker build -t serve-job -f docker/serve/Dockerfile .
 
 # Run a training job — S3 and MLflow endpoints are read from .env
-docker run --env-file .env \
-  -v $(pwd)/configs:/app/configs \
-  train-job --config configs/<your_config>.json
+docker run --env-file .env train-job --config configs/remote/<your_config>.json
 ```
 
 > When running against a local Docker Compose stack on macOS/Windows, replace `localhost` with `host.docker.internal` in your `.env` so the container can reach services on the host (e.g. `S3_ENDPOINT_URL=http://host.docker.internal:7000`). On Linux, also add `--add-host=host.docker.internal:host-gateway`. When using the remote GCE setup, `.env` already has the correct public IP and no changes are needed.
 
-## Argo Workflows
+## Remote GPU Training
 
-Argo Workflow pipelines live in `argo/` and are intended for orchestrating multi-step training runs on Kubernetes (e.g. preprocess → train). See [argo/README.md](argo/README.md) for details.
+### Modal (development)
+
+Run any training config on a GPU without managing infrastructure. Data is read from MinIO and results logged to MLflow — identical flow to local training.
 
 ```bash
-# First-time: install Argo Workflows on Docker Desktop's K8s cluster
-kubectl create namespace argo
-kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
+uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
+```
 
-# First-time: create S3 credentials secret and configs config map
-source .env && kubectl create secret generic s3-credentials --namespace argo \
-  --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-kubectl create configmap training-configs --namespace argo --from-file=configs/
+See [modal/README.md](modal/README.md) for prerequisites and setup.
 
-# Submit a pipeline
-argo submit -n argo argo/train-pipeline.yaml --watch
+### Argo Workflows on GKE (production-style)
+
+Argo Workflow pipelines live in `argo/` and run training jobs as K8s pods on a GKE cluster with T4 spot GPU nodes. See [argo/README.md](argo/README.md) for full cluster setup and image push instructions.
+
+```bash
+# Submit a training run (configs are baked into the training image)
+argo submit -n argo argo/train-pipeline.yaml \
+  -p config=configs/remote/tape_fluorescence_mlp_regressor.json --watch
 
 # Argo UI (optional)
 kubectl port-forward -n argo svc/argo-server 2746:2746
 # Then open https://localhost:2746
-```
-
-To update the configs config map after changing files locally:
-
-```bash
-kubectl create configmap training-configs --namespace argo --from-file=configs/ --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ## Testing

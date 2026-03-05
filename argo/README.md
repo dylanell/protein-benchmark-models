@@ -124,7 +124,7 @@ argo submit -n argo argo/train-pipeline.yaml --watch
 
 # Or specify a different config
 argo submit -n argo argo/train-pipeline.yaml \
-  -p config=configs/tape_fluorescence_cnn_regressor.json \
+  -p config=configs/remote/tape_fluorescence_cnn_regressor.json \
   --watch
 ```
 

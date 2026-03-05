@@ -4,7 +4,7 @@ Loads pre-split train/valid CSVs, builds the appropriate sequence dataset,
 injects data-derived shape params into the model constructor, and trains.
 
 Usage:
-    uv run python scripts/train.py --config configs/fluorescence_mlp_regressor.json
+    uv run python scripts/train.py --config configs/local/tape_fluorescence_ridge_regressor.json
 """
 
 import argparse
@@ -26,17 +26,8 @@ DATASET_CLASSES = {
 }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train a protein benchmark model from a config.")
-    parser.add_argument("--config", required=True, help="Path to JSON config file")
-    args = parser.parse_args()
-
-    with open(args.config) as f:
-        config = json.load(f)
-
-    print(f"[train] Running with config:")
-    print(json.dumps(config, indent=2))
-
+def run(config: dict) -> None:
+    """Core training logic. Accepts a config dict — callable locally or from remote runners."""
     # Validate required top-level keys
     for key in ("data", "model", "training"):
         if key not in config:
@@ -107,6 +98,20 @@ def main():
     )
 
     print(f"[train] Training complete.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train a protein benchmark model from a config.")
+    parser.add_argument("--config", required=True, help="Path to JSON config file")
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        config = json.load(f)
+
+    print(f"[train] Running with config:")
+    print(json.dumps(config, indent=2))
+
+    run(config)
 
 
 if __name__ == "__main__":
