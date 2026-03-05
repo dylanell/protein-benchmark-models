@@ -8,7 +8,10 @@
     "model": {
         "name": "mlp_regressor",
         "params": {
-            "layer_dims": [1024, 1],
+            "layer_dims": [
+                1024,
+                1
+            ],
             "hidden_activation": "LeakyReLU",
             "output_activation": "Identity",
             "use_bias": true,
@@ -19,7 +22,7 @@
         "experiment_name": "tape_fluorescence_regression",
         "run_name": null,
         "model_path": ".models/tape_fluorescence_mlp_regressor",
-        "lr": 1e-4,
+        "lr": 0.0001,
         "weight_decay": 0.01,
         "max_epochs": 5,
         "batch_size": 256,

@@ -3,14 +3,14 @@
 TAPE tasks (one fixed train/valid/test split):
     uv run python scripts/onboard.py --task fluorescence
     uv run python scripts/onboard.py --task stability
-    uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
+    uv run python scripts/onboard.py --task fluorescence --dest s3://data/tape/fluorescence/
 
 FLIP2 tasks (multiple named splits, each gets its own subdirectory):
     uv run python scripts/onboard.py --task amylase
     uv run python scripts/onboard.py --task ired
     uv run python scripts/onboard.py --task nucb
     uv run python scripts/onboard.py --task hydro
-    uv run python scripts/onboard.py --task rhomax
+    uv run python scripts/onboard.py --task rhomax --dest s3://data/flip2/fluorescence/
 
 Output structure for FLIP2:
     .data/<task>/<split>/train.csv

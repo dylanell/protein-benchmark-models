@@ -100,11 +100,9 @@ model = ModelRegistry.load(".models/my_model")
 model.train(
     experiment_name="my-experiment",
     train_data=train_dataset,
-    val_data=val_dataset,
-    model_path=".models/my_model",  # local or s3:// path
+    val_data=val_dataset,           # required
+    model_path=".models/my_model",  # required; _final and _best suffixes appended automatically
     run_name="run-1",               # optional
-    save_model="best",              # optional: "best" or "final"
-    seed=42,
     tracking=True,
     # Model-specific training kwargs (e.g. for MLP/CNN):
     lr=1e-4,
@@ -112,9 +110,10 @@ model.train(
     max_epochs=100,
     batch_size=256,
 )
+# Writes: .models/my_model_final (always) and .models/my_model_best (PyTorch only, on val improvement)
 
 # Quick iteration without MLflow
-model.train(train_data=train_dataset, tracking=False, max_epochs=5)
+model.train(train_data=train_dataset, val_data=val_dataset, model_path=".models/my_model", tracking=False, max_epochs=5)
 ```
 
 ### Evaluation
@@ -131,11 +130,13 @@ metrics = evaluate(model, X, y)
 
 ### Reproducibility
 
-Pass `seed=42` to `model.train()`. The seed is logged to MLflow automatically.
+Pass `seed=42` to the model constructor. It seeds before weight init and again at the start of `_fit()` for shuffle/dropout reproducibility. The seed is logged to MLflow automatically via `get_params()`.
 
 ```python
 from protein_benchmark_models.utils import seed_everything
-seed_everything(42)  # Seeds random, numpy, and torch
+seed_everything(42)  # Seeds random, numpy, and torch — call before model construction in notebooks
+
+model = MLPRegressor(layer_dims=[..., 1], seed=42)
 ```
 
 ### Model Authoring Guide
@@ -164,7 +165,7 @@ class BaseModel(ABC):
     def load(cls, path: str) -> BaseModel
 
     # Abstract — subclasses must implement
-    def _fit(self, train_data, val_data=None, **kwargs) -> None
+    def _fit(self, train_data, val_data, **kwargs) -> None
     def _save_weights(self, dir_path: str) -> None
     def _load_weights(self, dir_path: str) -> None
     def predict(self, X: np.ndarray) -> np.ndarray  # always returns shape (N,)
@@ -246,18 +247,73 @@ All FLIP2 tasks are sourced from [Zenodo record 18433203](https://zenodo.org/rec
 | `hydro` | `three_to_many`, `low_to_high`, `to_P06241`, `to_P0A9X9`, `to_P01053`, `random_split` |
 | `rhomax` | `by_wild_type` |
 
-## Local Services (MinIO + MLflow)
+## Services (MinIO + MLflow)
 
-Start MinIO (S3-compatible storage) and MLflow (experiment tracking) via Docker Compose:
+MLflow (experiment tracking) and MinIO (S3-compatible artifact storage) are run via the same `docker-compose.yaml` in both local and remote setups. The only difference is the `.env` file. See `.env.example` for both configurations.
+
+### Option A — Local (Docker Desktop)
 
 ```bash
 docker compose up -d
 ```
 
 - **MLflow UI:** [http://localhost:5000](http://localhost:5000)
-- **MinIO Console:** [http://localhost:7001](http://localhost:7001) (login: `minioadmin`/`minioadmin`)
+- **MinIO console:** [http://localhost:7001](http://localhost:7001) (login: `minioadmin`/`minioadmin`)
 
-Stop services with `docker compose down`. Data persists in Docker volumes across restarts.
+Stop with `docker compose down`. Data persists in Docker volumes.
+
+### Option B — Remote (GCE VM)
+
+A persistent GCE VM (`e2-medium`, `us-central1-a`) runs the same `docker-compose.yaml` with a reserved static IP. This allows training jobs running anywhere (local, Modal, GKE) to log to a shared MLflow server.
+
+```bash
+# Start VM
+gcloud compute instances start mlflow-server --zone us-central1-a
+
+# Stop VM when not in use (no compute charge while stopped)
+gcloud compute instances stop mlflow-server --zone us-central1-a
+
+# SSH in
+gcloud compute ssh mlflow-server --zone us-central1-a
+```
+
+To deploy from scratch on a new VM:
+
+```bash
+# 1. Create VM
+gcloud compute instances create mlflow-server \
+  --zone us-central1-a \
+  --machine-type e2-medium \
+  --image-family debian-12 \
+  --image-project debian-cloud \
+  --tags mlflow-server \
+  --boot-disk-size 20GB
+
+# 2. Open ports
+gcloud compute firewall-rules create allow-mlflow-minio \
+  --allow tcp:5000,tcp:7000,tcp:7001 \
+  --target-tags mlflow-server
+
+# 3. Reserve and attach a static IP
+gcloud compute addresses create mlflow-server-ip --region us-central1
+gcloud compute instances delete-access-config mlflow-server --access-config-name "external-nat" --zone us-central1-a
+gcloud compute instances add-access-config mlflow-server --access-config-name "external-nat" \
+  --address $(gcloud compute addresses describe mlflow-server-ip --region us-central1 --format='get(address)') \
+  --zone us-central1-a
+
+# 4. Install Docker, copy docker-compose.yaml, create .env, start services
+gcloud compute ssh mlflow-server --zone us-central1-a
+# On the VM:
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER && newgrp docker
+# Copy docker-compose.yaml to the VM (from local):
+# gcloud compute scp docker-compose.yaml mlflow-server:~/docker-compose.yaml --zone us-central1-a
+docker compose up -d
+```
+
+Update `.env` locally to point at the VM's static IP (see `.env.example` Option B).
+
+> **Security note:** MLflow and MinIO are exposed publicly with no authentication. Acceptable for private R&D; restrict firewall rules to known IPs for shared use.
 
 ## Docker
 
@@ -269,16 +325,13 @@ docker build -t preprocess-job -f docker/preprocess/Dockerfile .
 docker build -t train-job -f docker/train/Dockerfile .
 docker build -t serve-job -f docker/serve/Dockerfile .
 
-# Run a training job (reads data via S3, saves model to S3, logs to MLflow)
+# Run a training job — S3 and MLflow endpoints are read from .env
 docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
   -v $(pwd)/configs:/app/configs \
   train-job --config configs/<your_config>.json
 ```
 
-> `--env-file .env` loads S3 and MLflow credentials. On Linux, add `--add-host=host.docker.internal:host-gateway` to resolve the host from inside the container.
+> When running against a local Docker Compose stack on macOS/Windows, replace `localhost` with `host.docker.internal` in your `.env` so the container can reach services on the host (e.g. `S3_ENDPOINT_URL=http://host.docker.internal:7000`). On Linux, also add `--add-host=host.docker.internal:host-gateway`. When using the remote GCE setup, `.env` already has the correct public IP and no changes are needed.
 
 ## Argo Workflows
 
