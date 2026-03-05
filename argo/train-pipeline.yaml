@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: train-pipeline-
+spec:
+  entrypoint: train
+  arguments:
+    parameters:
+      - name: config
+        value: configs/tape_fluorescence_mlp_regressor.json
+  templates:
+    - name: train
+      inputs:
+        parameters:
+          - name: config
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4
+      tolerations:
+        - key: cloud.google.com/gke-spot
+          operator: Exists
+          effect: NoSchedule
+      container:
+        image: us-central1-docker.pkg.dev/modular-scout-486816-g3/protein-benchmark/train:latest
+        imagePullPolicy: Always
+        command: ["uv", "run", "python", "scripts/train.py"]
+        args: ["--config", "{{inputs.parameters.config}}"]
+        envFrom:
+          - secretRef:
+              name: mlflow-minio-credentials
+        env:
+          - name: PYTHONUNBUFFERED
+            value: "1"
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "2"
+            nvidia.com/gpu: "1"
+          limits:
+            nvidia.com/gpu: "1"
