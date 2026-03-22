@@ -83,7 +83,9 @@ class TestMLPRegressor:
         np.testing.assert_array_equal(preds, preds2)
 
     def test_config(self):
-        model = MLPRegressor(layer_dims=self.LAYER_DIMS, hidden_activation="ReLU")
+        model = MLPRegressor(
+            layer_dims=self.LAYER_DIMS, hidden_activation="ReLU"
+        )
         assert model.config["layer_dims"] == self.LAYER_DIMS
         assert model.config["hidden_activation"] == "ReLU"
         assert model.config["accelerator"] == "auto"

@@ -49,7 +49,9 @@ def sequence_data():
 
 @pytest.fixture
 def onehot_data():
-    return OneHotSequenceDataset(sequences=SEQUENCES, targets=TARGETS, seq_len=SEQ_LEN)
+    return OneHotSequenceDataset(
+        sequences=SEQUENCES, targets=TARGETS, seq_len=SEQ_LEN
+    )
 
 
 @pytest.fixture

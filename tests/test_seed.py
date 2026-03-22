@@ -32,7 +32,7 @@ class TestSeedEverything:
     # tmp_path is a built-in pytest fixture that provides a temporary directory
     # unique to each test invocation, automatically cleaned up afterwards.
     def test_mlp_training_determinism(self, onehot_data, tmp_path):
-        """Two MLP training runs with the same seed produce identical predictions."""
+        """Two MLP runs with the same seed produce identical predictions."""
         X = onehot_X(onehot_data)
 
         def train_and_predict(seed, path):

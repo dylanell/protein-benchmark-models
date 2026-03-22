@@ -158,13 +158,16 @@ class CNNRegressor(BaseModel):
 
                 if epochs_without_improvement == patience:
                     print(
-                        f"{patience} epochs reached without improvement. Early stopping."
+                        f"{patience} epochs without improvement."
+                        " Early stopping."
                     )
                     break
 
             status = (
-                f"Epoch: {epoch + 1}/{max_epochs} | train_loss: {train_loss:.4f} | "
-                f"val_loss: {val_loss:.4f} | best_val_loss: {best_val_loss:.4f}"
+                f"Epoch: {epoch + 1}/{max_epochs}"
+                f" | train_loss: {train_loss:.4f}"
+                f" | val_loss: {val_loss:.4f}"
+                f" | best_val_loss: {best_val_loss:.4f}"
             )
             pbar.set_description(status)
 

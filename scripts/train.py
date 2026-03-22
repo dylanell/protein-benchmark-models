@@ -4,7 +4,8 @@ Loads pre-split train/valid CSVs, builds the appropriate sequence dataset,
 injects data-derived shape params into the model constructor, and trains.
 
 Usage:
-    uv run python scripts/train.py --config configs/local/tape_fluorescence_ridge_regressor.json
+    uv run python scripts/train.py \
+        --config configs/local/tape_fluorescence_ridge_regressor.json
 """
 
 import logging

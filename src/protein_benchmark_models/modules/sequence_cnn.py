@@ -49,7 +49,7 @@ class SequenceCNN(nn.Module):
                 size of the CNN output.
             output_dim: Number of output units in the linear head.
             padding_idx: Token index treated as padding (embedding zeroed out).
-            hidden_activation: nn activation name applied after each hidden layer.
+            hidden_activation: nn activation applied after each hidden layer.
             output_activation: nn activation name applied after the final conv.
             use_bias: Whether to include bias in conv and linear layers.
             norm: "batch" for BatchNorm1d, "layer" for LayerNorm, or None.
@@ -82,7 +82,7 @@ class SequenceCNN(nn.Module):
                 if norm == "batch":
                     cnn_layers.append(nn.BatchNorm1d(out_channels))
                 # LayerNorm normalises over channels at each position, so we
-                # need [B, seq_len, out_channels] — transpose, norm, transpose back.
+                # need [B, seq_len, out_channels] — transpose, norm, transpose.
                 elif norm == "layer":
                     cnn_layers.append(Transpose(1, 2))
                     cnn_layers.append(nn.LayerNorm(out_channels))
@@ -98,9 +98,11 @@ class SequenceCNN(nn.Module):
         self.linear = nn.Linear(cnn_output_dim, output_dim, bias=use_bias)
 
     def forward(self, x):
-        x = self.embedding(x)       # [B, seq_len, embed_dim]
-        x = x.transpose(1, 2)       # [B, embed_dim, seq_len] — Conv1d expects (B, C, L)
-        x = self.cnn(x)             # [B, out_channels_last, final_seq_len]
+        x = self.embedding(x)  # [B, seq_len, embed_dim]
+        x = x.transpose(
+            1, 2
+        )  # [B, embed_dim, seq_len] — Conv1d expects (B, C, L)
+        x = self.cnn(x)  # [B, out_channels_last, final_seq_len]
         x = x.flatten(start_dim=1)  # [B, cnn_output_dim]
-        x = self.linear(x)          # [B, output_dim]
+        x = self.linear(x)  # [B, output_dim]
         return x
