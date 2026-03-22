@@ -7,9 +7,9 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel as PydanticBaseModel
 
-from protein_benchmark_models.data import TabularDataset
-from protein_benchmark_models.models import ModelRegistry
-from protein_benchmark_models.utils import get_storage_options
+from ..data import TabularDataset
+from ..models import ModelRegistry
+from ..utils import get_storage_options
 
 
 class PredictRequest(PydanticBaseModel):
@@ -20,13 +20,19 @@ class PredictResponse(PydanticBaseModel):
     predictions: list[list[float]]
 
 
-def create_app(config: dict, feature_names: list[str] | None = None, class_names: list[str] | None = None) -> FastAPI:
+def create_app(
+    config: dict,
+    feature_names: list[str] | None = None,
+    class_names: list[str] | None = None,
+) -> FastAPI:
     """Create a FastAPI app for serving a trained model.
 
     Args:
         config: Parsed JSON config (same format as training configs).
-        feature_names: Override feature names (skips CSV load when provided with class_names).
-        class_names: Override class names (skips CSV load when provided with feature_names).
+        feature_names: Override feature names (skips CSV load when
+            provided alongside class_names).
+        class_names: Override class names (skips CSV load when
+            provided alongside feature_names).
     """
     # Load dataset metadata if not provided
     if feature_names is None or class_names is None:
@@ -44,7 +50,8 @@ def create_app(config: dict, feature_names: list[str] | None = None, class_names
     model_path = config["training"]["model_path"]
 
     if model_path.startswith("s3://"):
-        from protein_benchmark_models.utils import get_s3_filesystem
+        from ..utils import get_s3_filesystem
+
         fs = get_s3_filesystem()
 
         tmp_dir = tempfile.mkdtemp()
@@ -79,7 +86,10 @@ def create_app(config: dict, feature_names: list[str] | None = None, class_names
             if len(sample) != num_features:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Sample {i} has {len(sample)} features, expected {num_features}: {feature_names}",
+                    detail=(
+                        f"Sample {i} has {len(sample)} features,"
+                        f" expected {num_features}: {feature_names}"
+                    ),
                 )
 
         X = np.array(request.features, dtype=np.float32)

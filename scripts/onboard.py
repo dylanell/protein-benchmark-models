@@ -3,14 +3,14 @@
 TAPE tasks (one fixed train/valid/test split):
     uv run python scripts/onboard.py --task fluorescence
     uv run python scripts/onboard.py --task stability
-    uv run python scripts/onboard.py --task fluorescence --dest s3://data/fluorescence/
+    uv run python scripts/onboard.py --task fluorescence --dest s3://data/tape/fluorescence/
 
 FLIP2 tasks (multiple named splits, each gets its own subdirectory):
     uv run python scripts/onboard.py --task amylase
     uv run python scripts/onboard.py --task ired
     uv run python scripts/onboard.py --task nucb
     uv run python scripts/onboard.py --task hydro
-    uv run python scripts/onboard.py --task rhomax
+    uv run python scripts/onboard.py --task rhomax --dest s3://data/flip2/fluorescence/
 
 Output structure for FLIP2:
     .data/<task>/<split>/train.csv
@@ -18,6 +18,7 @@ Output structure for FLIP2:
     .data/<task>/<split>/test.csv
 """
 
+import logging
 import argparse
 import io
 import json
@@ -32,6 +33,10 @@ from protein_benchmark_models.utils import get_s3_filesystem
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+_SCRIPT = "onboard.py"
 TAPE_BASE = "http://s3.amazonaws.com/songlabdata/proteindata/data_raw_pytorch"
 ZENODO_BASE = "https://zenodo.org/records/18433203/files"
 
@@ -49,17 +54,32 @@ TAPE_TASKS = {
 }
 
 FLIP2_TASKS = {
-    "amylase": ["one_to_many", "close_to_far", "far_to_close", "by_mutation", "random_split"],
-    "ired":    ["two_to_many", "random"],
-    "nucb":    ["two_to_many", "random"],
-    "hydro":   ["three_to_many", "low_to_high", "to_P06241", "to_P0A9X9", "to_P01053", "random_split"],
-    "rhomax":  ["by_wild_type"],
+    "amylase": [
+        "one_to_many",
+        "close_to_far",
+        "far_to_close",
+        "by_mutation",
+        "random_split",
+    ],
+    "ired": ["two_to_many", "random"],
+    "nucb": ["two_to_many", "random"],
+    "hydro": [
+        "three_to_many",
+        "low_to_high",
+        "to_P06241",
+        "to_P0A9X9",
+        "to_P01053",
+        "random_split",
+    ],
+    "rhomax": ["by_wild_type"],
 }
 
 SPLITS = ["train", "valid", "test"]
 
 
-def parse_tape_json(data: bytes, target_field: str, extra_fields: list) -> pd.DataFrame:
+def parse_tape_json(
+    data: bytes, target_field: str, extra_fields: list
+) -> pd.DataFrame:
     """Parse a TAPE JSON file (array of records) into a DataFrame.
 
     Maps `primary` → `sequence` and `{target_field}` → `target`.
@@ -80,7 +100,9 @@ def parse_tape_json(data: bytes, target_field: str, extra_fields: list) -> pd.Da
     return pd.DataFrame(rows)
 
 
-def find_tar_member(tar: tarfile.TarFile, task_name: str, split: str) -> tarfile.ExFileObject:
+def find_tar_member(
+    tar: tarfile.TarFile, task_name: str, split: str
+) -> tarfile.ExFileObject:
     """Return the file object for *_{split}.json inside the tarball."""
     suffix = f"_{split}.json"
     for member in tar.getmembers():
@@ -112,10 +134,10 @@ def onboard_tape_task(task_name: str, dest: str) -> None:
     target_field = task["target_field"]
     extra_fields = task["extra_fields"]
 
-    print(f"Downloading {task_name} from {url} ...")
+    logger.info(f"[{_SCRIPT}] Downloading {task_name} from {url} ...")
     with urllib.request.urlopen(url) as response:
         tar_bytes = response.read()
-    print(f"Downloaded {len(tar_bytes) / 1_000_000:.1f} MB")
+    logger.info(f"[{_SCRIPT}] Downloaded {len(tar_bytes) / 1_000_000:.1f} MB")
 
     dest = dest.rstrip("/")
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
@@ -124,11 +146,14 @@ def onboard_tape_task(task_name: str, dest: str) -> None:
             df = parse_tape_json(f.read(), target_field, extra_fields)
             out_path = f"{dest}/{split}.csv"
             write_df(df, out_path)
-            print(f"Saved {split}.csv ({len(df):,} rows) → {out_path}")
+            logger.info(
+                f"[{_SCRIPT}] Saved {split}.csv"
+                f" ({len(df):,} rows) to {out_path}"
+            )
 
 
 def onboard_flip2_task(task_name: str, dest: str) -> None:
-    """Download all splits for a FLIP2 task, writing train/valid/test CSVs per split.
+    """Download all splits for a FLIP2 task, writing CSVs per split.
 
     Each split is fetched as a .csv.gz from Zenodo and written to:
         <dest>/<split>/train.csv   — set=="train" and validation==False
@@ -140,26 +165,43 @@ def onboard_flip2_task(task_name: str, dest: str) -> None:
 
     for split in splits:
         url = f"{ZENODO_BASE}/{task_name}/{split}.csv.gz?download=1"
-        print(f"Downloading {task_name}/{split} from {url} ...")
+        logger.info(
+            f"[{_SCRIPT}] Downloading {task_name}/{split} from {url} ..."
+        )
         with urllib.request.urlopen(url) as response:
             data = response.read()
-        print(f"Downloaded {len(data) / 1_000_000:.1f} MB")
+        logger.info(f"[{_SCRIPT}] Downloaded {len(data) / 1_000_000:.1f} MB")
 
         df = pd.read_csv(io.BytesIO(data), compression="gzip")
 
-        train_df = df[(df["set"] == "train") & ~df["validation"]][["sequence", "target"]].reset_index(drop=True)
-        valid_df = df[(df["set"] == "train") &  df["validation"]][["sequence", "target"]].reset_index(drop=True)
-        test_df  = df[ df["set"] == "test"                      ][["sequence", "target"]].reset_index(drop=True)
+        train_df = df[(df["set"] == "train") & ~df["validation"]][
+            ["sequence", "target"]
+        ].reset_index(drop=True)
+        valid_df = df[(df["set"] == "train") & df["validation"]][
+            ["sequence", "target"]
+        ].reset_index(drop=True)
+        test_df = df[df["set"] == "test"][["sequence", "target"]].reset_index(
+            drop=True
+        )
 
         split_dest = f"{dest}/{split}"
-        for split_name, split_df in [("train", train_df), ("valid", valid_df), ("test", test_df)]:
+        for split_name, split_df in [
+            ("train", train_df),
+            ("valid", valid_df),
+            ("test", test_df),
+        ]:
             out_path = f"{split_dest}/{split_name}.csv"
             write_df(split_df, out_path)
-            print(f"Saved {split_name}.csv ({len(split_df):,} rows) → {out_path}")
+            logger.info(
+                f"[{_SCRIPT}] Saved {split_name}.csv"
+                f" ({len(split_df):,} rows) to {out_path}"
+            )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download protein benchmark datasets.")
+    parser = argparse.ArgumentParser(
+        description="Download protein benchmark datasets."
+    )
     parser.add_argument(
         "--task",
         required=True,
@@ -169,7 +211,7 @@ def main():
     parser.add_argument(
         "--dest",
         default=None,
-        help="Destination directory (local or s3://). Defaults to .data/<task>/",
+        help="Destination (local or s3://). Defaults to .data/<task>/",
     )
     args = parser.parse_args()
 
@@ -177,7 +219,9 @@ def main():
         dest = args.dest if args.dest is not None else f".data/tape/{args.task}"
         onboard_tape_task(args.task, dest)
     else:
-        dest = args.dest if args.dest is not None else f".data/flip2/{args.task}"
+        dest = (
+            args.dest if args.dest is not None else f".data/flip2/{args.task}"
+        )
         onboard_flip2_task(args.task, dest)
 
 

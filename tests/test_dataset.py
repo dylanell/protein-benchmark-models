@@ -3,7 +3,8 @@
 Covers:
 - SequenceDataset: raw string passthrough, correct item types and values.
 - TokenizedSequenceDataset: shape, dtype, padding, trimming, vocab encoding.
-- OneHotSequenceDataset: shape, dtype, valid one-hot rows, padding, trimming, encoding.
+- OneHotSequenceDataset: shape, dtype, valid one-hot rows, padding, trimming,
+  encoding.
 """
 
 import torch
@@ -52,10 +53,10 @@ class TestTokenizedSequenceDataset:
         assert (tokens[4:] == 0).all()
 
     def test_trimming(self, tokenized_data):
-        # SEQUENCES[2] = "ACDEFGHIKLMN" (12 chars) — should be trimmed to SEQ_LEN
+        # SEQUENCES[2] = "ACDEFGHIKLMN" (12 chars) — trimmed to SEQ_LEN
         tokens = tokenized_data[2]["tokens"]
         assert tokens.shape == (SEQ_LEN,)
-        # Last token should be the 8th character: "ACDEFGHI"[7] = 'I' → AA_VOCAB['I']
+        # Last token: "ACDEFGHI"[7] = 'I' → AA_VOCAB['I']
         assert tokens[-1].item() == AA_VOCAB["I"]
 
     def test_known_aa_encoding(self, tokenized_data):
@@ -90,7 +91,7 @@ class TestOneHotSequenceDataset:
         assert (row_sums == 1.0).all()
 
     def test_padding_position(self, onehot_data):
-        # SEQUENCES[1] = "ACDX" (4 chars) — padded positions should have 1.0 at PAD index (0)
+        # SEQUENCES[1] = "ACDX" (4 chars) — padded: 1.0 at PAD index (0)
         one_hots = onehot_data[1]["one_hots"]
         padded_rows = one_hots[4:]
         assert (padded_rows[:, 0] == 1.0).all()
@@ -98,7 +99,7 @@ class TestOneHotSequenceDataset:
 
     def test_trimming(self, onehot_data):
         # SEQUENCES[2] = "ACDEFGHIKLMN" (12 chars) — trimmed to SEQ_LEN rows
-        # Last encoded position should be "ACDEFGHI"[7] = 'I' → one-hot at AA_VOCAB['I']
+        # Last position: "ACDEFGHI"[7] = 'I' → one-hot at AA_VOCAB['I']
         one_hots = onehot_data[2]["one_hots"]
         assert one_hots.shape == (SEQ_LEN, VOCAB_SIZE)
         assert one_hots[-1, AA_VOCAB["I"]].item() == 1.0

@@ -72,7 +72,10 @@ class TokenizedSequenceDataset(Dataset):
         self.targets = torch.tensor(targets, dtype=torch.float32)
 
     def _encode(self, sequence: str) -> torch.Tensor:
-        ids = [self.vocab.get(aa, self.vocab["<UNK>"]) for aa in sequence[: self.seq_len]]
+        ids = [
+            self.vocab.get(aa, self.vocab["<UNK>"])
+            for aa in sequence[: self.seq_len]
+        ]
         if len(ids) < self.seq_len:
             ids += [self.vocab["<PAD>"]] * (self.seq_len - len(ids))
         tokens = torch.tensor(ids, dtype=torch.long)
@@ -80,7 +83,9 @@ class TokenizedSequenceDataset(Dataset):
 
     def _decode(self, tokens: torch.Tensor) -> str:
         inv_vocab = {i: aa for aa, i in self.vocab.items()}
-        sequence = "".join(inv_vocab[i] for i in tokens.tolist() if i != self.vocab["<PAD>"])
+        sequence = "".join(
+            inv_vocab[i] for i in tokens.tolist() if i != self.vocab["<PAD>"]
+        )
         return sequence
 
     def __len__(self) -> int:
@@ -122,10 +127,15 @@ class OneHotSequenceDataset(Dataset):
         self.targets = torch.tensor(targets, dtype=torch.float32)
 
     def _encode(self, sequence: str) -> torch.Tensor:
-        ids = [self.vocab.get(aa, self.vocab["<UNK>"]) for aa in sequence[: self.seq_len]]
+        ids = [
+            self.vocab.get(aa, self.vocab["<UNK>"])
+            for aa in sequence[: self.seq_len]
+        ]
         if len(ids) < self.seq_len:
             ids += [self.vocab["<PAD>"]] * (self.seq_len - len(ids))
-        one_hots = torch.eye(len(self.vocab))[torch.tensor(ids, dtype=torch.long)]
+        one_hots = torch.eye(len(self.vocab))[
+            torch.tensor(ids, dtype=torch.long)
+        ]
         return one_hots
 
     def _decode(self, one_hots: torch.Tensor) -> str:

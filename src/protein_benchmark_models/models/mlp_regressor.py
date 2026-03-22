@@ -15,13 +15,16 @@ from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from protein_benchmark_models.data import OneHotSequenceDataset
-from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.modules.fully_connected import FullyConnected
+from ..data import OneHotSequenceDataset
+from .base import BaseModel
+from ..modules.fully_connected import FullyConnected
+from ..utils import evaluate_regression, seed_everything
 
 
 class MLPRegressor(BaseModel):
     """MLP regressor backed by a FullyConnected module."""
+
+    model_name = "mlp_regressor"
 
     def __init__(
         self,
@@ -36,20 +39,9 @@ class MLPRegressor(BaseModel):
         precision: str | int = "32-true",
         plugins: str | Any | None = None,
         callbacks: list[Any] | Any | None = None,
-        loggers: Logger | list[Logger] | None = None
+        loggers: Logger | list[Logger] | None = None,
     ):
         super().__init__()
-
-        # Initialize fabric
-        self.fabric = L.Fabric(
-            accelerator=accelerator,
-            strategy=strategy,
-            devices=devices,
-            precision=precision,
-            plugins=plugins,
-            callbacks=callbacks,
-            loggers=loggers
-        )
 
         self.model = FullyConnected(
             layer_dims=layer_dims,
@@ -61,24 +53,30 @@ class MLPRegressor(BaseModel):
 
         self.loss_fcn = nn.MSELoss()
 
+        # Initialize fabric
+        self.fabric = L.Fabric(
+            accelerator=accelerator,
+            strategy=strategy,
+            devices=devices,
+            precision=precision,
+            plugins=plugins,
+            callbacks=callbacks,
+            loggers=loggers,
+        )
+
     def _fit(
         self,
         train_data: OneHotSequenceDataset,
-        val_data: OneHotSequenceDataset | None = None,
+        val_data: OneHotSequenceDataset,
         *,
+        model_path: str,
         lr: float = 1e-3,
         weight_decay: float = 0.0,
         batch_size: int = 32,
         max_epochs: int = 100,
         val_frequency: int = 1,
         patience: int = -1,
-        save_model: str | None = None,
-        model_path: str | None = None,
     ) -> None:
-        if patience > 0 and val_data is None:
-            raise ValueError("Patience requires a validation dataset.")
-        if save_model == "best" and val_data is None:
-            raise ValueError("save_model='best' requires a validation dataset.")
 
         # Log training parameters before training starts
         self.log_param("lr", lr)
@@ -89,15 +87,20 @@ class MLPRegressor(BaseModel):
         self.log_param("patience", patience)
 
         # Initialize optimizer and fabric
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=lr, weight_decay=weight_decay
+        )
         model, optimizer = self.fabric.setup(self.model, optimizer)
 
         # Initialize dataloaders
-        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        train_dataloader = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True
+        )
         train_dataloader = self.fabric.setup_dataloaders(train_dataloader)
-        if val_data is not None:
-            val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-            val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
+        val_dataloader = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False
+        )
+        val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
 
         epochs_without_improvement = 0
         val_loss = float("inf")
@@ -122,7 +125,7 @@ class MLPRegressor(BaseModel):
             self.log_metric("train_loss", train_loss, step=epoch)
 
             # Validate
-            if (val_data is not None) and ((epoch + 1) % val_frequency == 0):
+            if (epoch + 1) % val_frequency == 0:
                 cum_val_loss = 0
                 model.eval()
                 with torch.no_grad():
@@ -139,33 +142,39 @@ class MLPRegressor(BaseModel):
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     epochs_without_improvement = 0
-                    if save_model == "best":
-                        self.save(model_path)
+                    self.save(model_path + "_best")
                 else:
                     epochs_without_improvement += 1
 
                 if epochs_without_improvement == patience:
-                    print(f"{patience} epochs reached without improvement. Early stopping.")
+                    print(
+                        f"{patience} epochs without improvement."
+                        " Early stopping."
+                    )
                     break
 
-            status = f"Epoch: {epoch+1}/{max_epochs} | train_loss: {train_loss:.4f} | "\
-                f"val_loss: {val_loss:.4f} | best_val_loss: {best_val_loss:.4f}"
+            status = (
+                f"Epoch: {epoch + 1}/{max_epochs}"
+                f" | train_loss: {train_loss:.4f}"
+                f" | val_loss: {val_loss:.4f}"
+                f" | best_val_loss: {best_val_loss:.4f}"
+            )
             pbar.set_description(status)
 
         # Final validation metrics
-        if val_data is not None:
-            from protein_benchmark_models.utils import evaluate
-            X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
-            y = val_data.targets.numpy()
-            metrics = evaluate(self, X, y)
-            for k, v in metrics.items():
-                self.log_metric(f"val_{k}", v)
-            print(f"[mlp_regressor] Valid RMSE: {metrics['rmse']:.04f}")
-            print(f"[mlp_regressor] Valid R2: {metrics['r2']:.04f}")
-            print(f"[mlp_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
-
-        if save_model == "final":
-            self.save(model_path)
+        X = np.stack(
+            [
+                val_data[i]["one_hots"].numpy().flatten()
+                for i in range(len(val_data))
+            ]
+        )
+        y = val_data.targets.numpy()
+        metrics = evaluate_regression(self, X, y)
+        for k, v in metrics.items():
+            self.log_metric(f"val_{k}", v)
+        print(f"[mlp_regressor] Valid RMSE: {metrics['rmse']:.04f}")
+        print(f"[mlp_regressor] Valid R2: {metrics['r2']:.04f}")
+        print(f"[mlp_regressor] Valid SpearmanR: {metrics['spearmanr']:.04f}")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Run inference. Returns raw model output as numpy array."""
@@ -177,7 +186,9 @@ class MLPRegressor(BaseModel):
 
     def _save_weights(self, dir_path: str) -> None:
         """Save model state dict to directory."""
-        self.fabric.save(os.path.join(dir_path, "model.pt"), {"model": self.model})
+        self.fabric.save(
+            os.path.join(dir_path, "model.pt"), {"model": self.model}
+        )
 
     def _load_weights(self, dir_path: str) -> None:
         """Load model state dict from directory."""

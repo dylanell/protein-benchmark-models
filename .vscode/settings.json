@@ -1,4 +1,16 @@
 {
   "jupyter.notebookFileRoot": "${workspaceFolder}",
-  "notebook.lineNumbers": "on"
+  "notebook.lineNumbers": "on",
+
+  // PEP8: show vertical ruler at column 80
+  "editor.rulers": [80],
+
+  // Wrap at 80 characters
+  "editor.wordWrapColumn": 80,
+
+  // Auto-format on save using ruff (PEP8-compliant, fast)
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  }
 }

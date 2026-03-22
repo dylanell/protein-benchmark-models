@@ -35,85 +35,57 @@ uv run pytest tests/ -v
 # Start local services (MinIO + MLflow)
 docker compose up -d
 
-# Onboard data (local or S3)
-uv run python scripts/onboard.py
-uv run python scripts/onboard.py --dest s3://data/iris/
+# Onboard data
+uv run python scripts/onboard.py --task fluorescence
+uv run python scripts/onboard.py --task amylase
 
 # Run scripts/notebooks
 uv run jupyter notebook
 
-# Preprocess data
-uv run python scripts/preprocess.py --config configs/iris_mlp_classifier.json
+# Train a model locally
+uv run python scripts/train.py --config configs/local/tape_fluorescence_ridge_regressor.json
+uv run python scripts/train.py --config configs/local/tape_fluorescence_mlp_regressor.json
 
-# Train a model from config
-uv run python scripts/train.py --config configs/iris_mlp_classifier.json
-uv run python scripts/train.py --config configs/iris_gb_classifier.json
+# Train remotely on GPU via Modal (reads data from MinIO, logs to MLflow)
+uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
 
 # Serve a trained model
-uv run python scripts/serve.py --config configs/iris_mlp_classifier.json
-uv run python scripts/serve.py --config configs/iris_gb_classifier.json
+uv run python scripts/serve.py --config configs/local/tape_fluorescence_mlp_regressor.json
 
-# Docker
-docker build -t preprocessing-job -f docker/preprocess/Dockerfile .
-docker build -t training-job -f docker/train/Dockerfile .
-docker build -t serving-job -f docker/serve/Dockerfile .
-
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -v $(pwd)/configs:/app/configs \
-  preprocessing-job --config configs/iris_mlp_classifier.json
-
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -v $(pwd)/configs:/app/configs \
-  training-job --config configs/iris_mlp_classifier.json
-
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -p 8000:8000 \
-  -v $(pwd)/configs:/app/configs \
-  serving-job --config configs/iris_mlp_classifier.json
-
-# Argo Workflows — first-time setup
-kubectl create namespace argo
-kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
-source .env && kubectl create secret generic s3-credentials --namespace argo \
-  --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-kubectl create configmap training-configs --namespace argo --from-file=configs/
-
-# Argo Workflows — run pipeline (preprocess → train)
-argo submit -n argo argo/train-classifier-pipeline.yaml --watch
-argo submit -n argo argo/train-classifier-pipeline.yaml -p config=configs/iris_gb_classifier.json --watch
+# Argo Workflows — run training on GKE (see argo/README.md for full setup)
+argo submit -n argo argo/train-pipeline.yaml \
+  -p config=configs/remote/tape_fluorescence_mlp_regressor.json --watch
 ```
 
 ## Architecture
 
 ```
-src/ml_project_template/
+src/protein_benchmark_models/
 ├── data/                    # Dataset abstractions
-│   ├── base.py              # BaseDataset ABC
-│   └── tabular.py           # TabularDataset for numerical data
+│   ├── base.py              # BaseDataset ABC (legacy)
+│   ├── tabular.py           # TabularDataset (legacy)
+│   └── sequence.py          # SequenceDataset, TokenizedSequenceDataset, OneHotSequenceDataset
 ├── models/                  # Model implementations
 │   ├── base.py              # BaseModel ABC (MLflow, save/load)
 │   ├── registry.py          # ModelRegistry for model discovery
-│   ├── gb_classifier.py     # Sklearn GradientBoosting wrapper
-│   └── mlp_classifier.py    # PyTorch MLP classifier
+│   ├── ridge_regressor.py   # Sklearn Ridge wrapper
+│   ├── mlp_regressor.py     # PyTorch MLP regressor (Fabric)
+│   └── cnn_regressor.py     # PyTorch 1D CNN regressor (Fabric)
 ├── modules/                 # Reusable nn.Module building blocks
-│   └── fully_connected.py   # FullyConnected (MLP block with norm/activation)
+│   ├── fully_connected.py   # FullyConnected (MLP block with norm/activation)
+│   ├── sequence_cnn.py      # SequenceCNN (stacked 1D convolutions)
+│   └── utils.py             # Shared nn.Module utilities (Transpose)
 ├── serving/
-│   └── app.py               # FastAPI app factory (generic, config-driven)
-├── utils/
-│   ├── io.py                # S3-compatible I/O utilities (get_storage_options, get_s3_filesystem)
-│   └── seed.py              # seed_everything() for reproducibility
+│   └── app.py               # FastAPI app factory (legacy, Iris-era)
+└── utils/
+    ├── io.py                # S3-compatible I/O utilities
+    ├── evaluation.py        # evaluate_regression() — RMSE, R2, SpearmanR
+    └── seed.py              # seed_everything() for reproducibility
 
-configs/                     # Training configs (JSON)
+configs/
+├── local/               # Configs with local .data/ paths (local training)
+└── remote/              # Configs with s3:// paths (Modal, GKE)
 docker/                      # Dockerfiles per pipeline stage
-├── preprocess/Dockerfile    # Preprocessing image
 ├── train/Dockerfile         # Training image
 └── serve/Dockerfile         # Serving image
 argo/                        # Argo Workflow pipelines
@@ -127,23 +99,29 @@ notebooks/                   # R&D notebooks
 
 ### Data Loading
 ```python
-from protein_benchmark_models.data import TabularDataset
-from protein_benchmark_models.utils import get_storage_options
+from protein_benchmark_models.data import OneHotSequenceDataset, TokenizedSequenceDataset
+import pandas as pd
 
-dataset = TabularDataset.from_csv("s3://data/iris/iris.csv", target_column="species", storage_options=get_storage_options("s3://data/iris/iris.csv"))
-train_data, test_data = dataset.split(test_size=0.2, random_state=42)
+df = pd.read_csv(".data/tape/fluorescence/train.csv")
+seq_len = df["sequence"].map(len).max()
+
+# For ridge/MLP: flatten one-hot encoded sequences
+dataset = OneHotSequenceDataset(df["sequence"].tolist(), df["target"].tolist(), seq_len=seq_len)
+
+# For CNN: integer-tokenized sequences
+dataset = TokenizedSequenceDataset(df["sequence"].tolist(), df["target"].tolist(), seq_len=seq_len)
 ```
 
 ### Model Registry
 ```python
 from protein_benchmark_models.models import ModelRegistry
-ModelRegistry.list()  # ['gb_classifier', 'mlp_classifier']
-model = ModelRegistry.get("mlp_classifier")(layer_dims=[4, 16, 3])
+ModelRegistry.list()  # ['ridge_regressor', 'mlp_regressor', 'cnn_regressor']
+model = ModelRegistry.get("ridge_regressor")(alpha=1.0)
 
 # Load a saved model — class is inferred from config.json (no need to know it upfront)
-model = ModelRegistry.load(".models/my_model")
+model = ModelRegistry.load(".models/my_model_final")
 # Or explicitly, when you know the model type
-model = MLPClassifier.load(".models/my_model")
+model = RidgeRegressor.load(".models/my_model_final")
 ```
 
 ### Training with MLflow
@@ -154,30 +132,31 @@ model = MLPClassifier.load(".models/my_model")
 model.train(
     experiment_name="my-experiment",
     train_data=train_data,
-    val_data=val_data,
-    model_path=".models/my_model",
-    run_name="run-1",        # optional
-    save_model="best",       # optional: "best" saves on each new best val loss,
-                             #           "final" saves once after training completes.
-                             #           Works with local and S3 paths.
+    val_data=val_data,           # required
+    model_path=".models/my_model",  # required; _final and _best suffixes are appended automatically
+    run_name="run-1",            # optional
     # Model-specific training kwargs (e.g. for MLP):
     lr=1e-3,
     weight_decay=1e-4,
     max_epochs=100,
     batch_size=32,
 )
+# Writes: .models/my_model_final (always) and .models/my_model_best (PyTorch only, on val improvement)
 ```
 
 ### Adding New Models
-1. Create `src/ml_project_template/models/my_model.py` extending `BaseModel` (from `base.py`)
-2. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()` (and `get_params()` only if automatic capture doesn't work — see below)
-3. Register in `registry.py`
+1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`)
+2. Set `model_name: ClassVar[str]` matching the registry key
+3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
+4. Register in `registry.py`
 
-For PyTorch models, initialize `lightning.Fabric` in `__init__` directly (see `mlp_classifier.py`).
+For PyTorch models, initialize `lightning.Fabric` in `__init__` directly (see `mlp_regressor.py`).
 
 ### BaseModel Interface
 ```python
 class BaseModel(ABC):
+    model_name: ClassVar[str]  # must be set on each subclass
+
     # Public API — MLflow orchestration (set experiment, start run, log params, save artifact)
     def train(self, *, experiment_name, train_data, **kwargs) -> None
 
@@ -189,23 +168,21 @@ class BaseModel(ABC):
     def load(cls, path: str) -> BaseModel
 
     # Abstract — subclasses must implement
-    def _fit(self, train_data, val_data=None, **kwargs) -> None
+    def _fit(self, train_data, val_data, **kwargs) -> None
     def _save_weights(self, dir_path: str) -> None
     def _load_weights(self, dir_path: str) -> None
     def predict(self, X: np.ndarray) -> np.ndarray
 
-    # Auto-populated from __init__ args via __init_subclass__ — no override needed
-    # Override only if automatic capture is insufficient (e.g. sklearn **kwargs)
-    def get_params(self) -> dict
+    # Log to MLflow (no-op when tracking=False) — use in _fit() instead of mlflow directly
+    def log_param(self, key, value) -> None
+    def log_metric(self, key, value, step=None) -> None
 ```
 
 ### Automatic `__init__` Param Capture
 `BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments
-into `self._model_params`. Logged to MLflow automatically in `train()`. Override
-`get_params()` only when needed (e.g. sklearn models where `**kwargs` doesn't capture
-individual params with defaults).
+into `self.config` (a plain dict). Logged to MLflow automatically in `train()`.
 
-See README.md "Automatic `__init__` param capture" for a full walkthrough with examples.
+See README.md "Automatic `__init__` param capture" for details.
 
 ## Conventions
 
@@ -213,16 +190,66 @@ See README.md "Automatic `__init__` param capture" for a full walkthrough with e
 - **Data in `.data/`** - Raw datasets, gitignored
 - **Models in `.models/`** - Saved artifacts, gitignored
 - **PyTorch models**: Separate `nn.Module` class from `BaseModel` wrapper in same file; initialize `lightning.Fabric` directly in `__init__`
-- **Sklearn models**: Override `get_params()` to delegate to sklearn's introspection
 - **NumPy I/O**: All models return raw numpy output from `predict()` — caller handles post-processing (argmax, etc.)
 - **Training params**: Logged manually inside `_fit()`, not auto-captured (only `__init__` args are auto-captured)
-- **Reproducibility**: Configs have a top-level `"seed"` key. Scripts call `seed_everything(seed)` early, and pass `seed=seed` to `model.train()`. The seed is logged to MLflow automatically.
+- **Reproducibility**: Configs have a top-level `"seed"` key. Scripts call `seed_everything(seed)` before model construction. Seeding is the caller's responsibility — models do not accept a `seed` argument.
+- **`embed_dims[0]` in CNN configs**: Must equal `len(AA_VOCAB)` = 22 (the fixed protein amino acid vocabulary size including PAD and UNK). This is intentionally explicit in configs — it's a constant property of the protein alphabet, not a data-derived value like `seq_len`, so it is not auto-injected by `train.py`.
+- **`_fit()` arg ordering**: `model_path` is always first after `*` in both MLP and CNN `_fit()` signatures, followed by training hyperparams (`lr`, `weight_decay`, etc.).
 
 ## Environment Variables
 
-Configured via `.env` file (loaded automatically by `python-dotenv`) or set in the environment directly. In production, these are set by the deployment platform (K8s Secrets, IAM roles, etc.).
+Configured via `.env` file (loaded automatically by `python-dotenv`). See `.env.example` for both local and remote configurations.
 
-- `MLFLOW_TRACKING_URI` - MLflow server URL (default: local `./mlruns`)
-- `S3_ENDPOINT_URL` - S3-compatible endpoint (e.g. `http://localhost:7000` for local MinIO)
-- `AWS_ACCESS_KEY_ID` - S3 access key
-- `AWS_SECRET_ACCESS_KEY` - S3 secret key
+- `MLFLOW_TRACKING_URI` - MLflow server URL (e.g. `http://localhost:5000` or `http://<vm-ip>:5000`)
+- `S3_ENDPOINT_URL` - S3-compatible endpoint for data I/O (e.g. `http://localhost:7000` for MinIO)
+- `MLFLOW_S3_ENDPOINT_URL` - S3-compatible endpoint for MLflow artifact storage
+- `AWS_ACCESS_KEY_ID` - S3/MinIO access key
+- `AWS_SECRET_ACCESS_KEY` - S3/MinIO secret key
+
+## Local Services (MLflow + MinIO)
+
+```bash
+# Start
+docker compose up -d
+
+# MLflow UI: http://localhost:5000
+# MinIO console: http://localhost:7001
+```
+
+## Remote Services (GCE VM)
+
+Deploy the same `docker-compose.yaml` on a GCP VM for a persistent, GPU-job-accessible
+MLflow + MinIO server. Only `.env` needs to change — the rest of the codebase is identical.
+
+```bash
+# 1. Create a VM (e2-micro is free-tier eligible)
+gcloud compute instances create mlflow-server \
+  --zone us-central1-a \
+  --machine-type e2-micro \
+  --image-family debian-12 \
+  --image-project debian-cloud \
+  --tags mlflow-server
+
+# 2. Open ports for MLflow (5000) and MinIO (7000, 7001)
+gcloud compute firewall-rules create allow-mlflow \
+  --allow tcp:5000,tcp:7000,tcp:7001 \
+  --target-tags mlflow-server
+
+# 3. SSH in, install Docker, copy docker-compose.yaml, and start
+gcloud compute ssh mlflow-server
+# On the VM:
+curl -fsSL https://get.docker.com | sh
+# Copy docker-compose.yaml to the VM, then:
+docker compose up -d
+
+# 4. Get the VM's external IP
+gcloud compute instances describe mlflow-server \
+  --zone us-central1-a \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+```
+
+Then update `.env` with the VM's external IP (see `.env.example` Option B).
+
+> **Security note**: This exposes MLflow and MinIO publicly with no authentication.
+> Acceptable for private R&D; for shared or production use, restrict firewall rules
+> to known IPs or add a reverse proxy with authentication.

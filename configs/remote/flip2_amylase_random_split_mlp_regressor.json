@@ -1,0 +1,33 @@
+{
+    "seed": 42,
+    "data": {
+        "train_path": "s3://data/flip2/amylase/random_split/train.csv",
+        "valid_path": "s3://data/flip2/amylase/random_split/valid.csv",
+        "dataset_type": "one_hot"
+    },
+    "model": {
+        "name": "mlp_regressor",
+        "params": {
+            "layer_dims": [
+                1024,
+                1
+            ],
+            "hidden_activation": "LeakyReLU",
+            "output_activation": "Identity",
+            "use_bias": true,
+            "norm": "layer"
+        }
+    },
+    "training": {
+        "experiment_name": "flip2_amylase_random_split_regression",
+        "run_name": null,
+        "model_path": ".models/flip2_amylase_random_split_mlp_regressor",
+        "lr": 0.0001,
+        "weight_decay": 0.01,
+        "max_epochs": 1000,
+        "batch_size": 256,
+        "val_frequency": 1,
+        "patience": 25,
+        "tracking": true
+    }
+}

@@ -2,32 +2,90 @@
 
 Benchmark suite comparing protein ML models on regression tasks from [TAPE](https://github.com/songlab-gpu/tape) and [FLIP2](https://zenodo.org/records/18433203). Simple baselines (ridge regression, MLP, CNN) are benchmarked first; pretrained protein LLM embeddings will follow.
 
-## TODO
+## Table of Contents
 
-- [x] Add 1D CNN baseline model over tokenized sequences
-- [x] Onboard FLIP2 tasks and run baselines
-- [ ] Add pretrained protein LLM embedding models (ESM, etc.)
-- [ ] Train baselines to convergence on all FLIP2 splits
-- [ ] Wire up Docker training image and Argo pipeline for GPU training runs
+- [Setup](#setup)
+- [Architecture](#architecture)
+- [Key Patterns](#key-patterns)
+- [Datasets](#datasets)
+- [Services (MinIO + MLflow)](#services-minio--mlflow)
+- [Docker](#docker)
+- [Remote GPU Training](#remote-gpu-training)
+- [Testing](#testing)
+- [TODO](#todo)
 
 ## Setup
+
+### Claude
+
+Create a `.claude/` directory to hold the following files:
+
+`lessons.md`: This is updated when you correct Claude about a mistake to note gotchas Claude should look out for. 
+
+`session_notes_<N>.md`: This is populated at the end of each session to summarize the additional work done in each session. 
+
+`settings.json`: Claude settings file that is read by default when claude starts up. Put the following in this file to ensure Claude reviews lessions and the session notes at start up automatically.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '## .claude/lessons.md' && cat .claude/lessons.md 2>/dev/null || echo 'none'; echo '## Latest Session Notes' && ls -t .claude/session_notes_*.md 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo 'none'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Python Project & Dependencies
 
 ```bash
 # Install uv if you haven't
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment and install dependencies
+# Initialize as Python package (first time project setup)
+# from directory containing this project directory (e.g. cd ../)
+uv init --package llm-knowledge-discovery
+
+# Create virtual environment manually (above does this as well)
 uv venv
 source .venv/bin/activate
-uv pip install -e "." --group dev
+
+# Sync dependencies and create the lock file
+uv sync
 ```
 
-Configure VSCode notebooks (add to `.vscode/settings.json`):
+### VSCode
+
+`.vscode/` is gitignored. Create `.vscode/settings.json` with the following:
+
 ```json
 {
-  "jupyter.notebookFileRoot": "${workspaceFolder}"
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "notebook.lineNumbers": "on",
+
+  // PEP8: show vertical ruler at column 80
+  "editor.rulers": [80],
+
+  // Wrap at 80 characters
+  "editor.wordWrapColumn": 80,
+
+  // Auto-format on save using ruff (PEP8-compliant, fast)
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  }
 }
 ```
+
+Also install the [Ruff VSCode extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff).
 
 ## Architecture
 
@@ -51,10 +109,12 @@ src/protein_benchmark_models/
 │   └── app.py                     # FastAPI app factory
 └── utils/
     ├── io.py                      # S3-compatible I/O utilities
-    ├── metrics.py                 # evaluate() — RMSE, R2, SpearmanR
+    ├── evaluation.py              # evaluate_regression() — RMSE, R2, SpearmanR
     └── seed.py                    # seed_everything() for reproducibility
 
-configs/                           # Training configs (JSON)
+configs/
+├── local/                         # Configs with local .data/ paths (local training)
+└── remote/                        # Configs with s3:// paths (Modal, GKE)
 docker/                            # Dockerfiles per pipeline stage
 scripts/                           # Data onboarding and pipeline entry points
 notebooks/                         # R&D notebooks
@@ -100,11 +160,9 @@ model = ModelRegistry.load(".models/my_model")
 model.train(
     experiment_name="my-experiment",
     train_data=train_dataset,
-    val_data=val_dataset,
-    model_path=".models/my_model",  # local or s3:// path
+    val_data=val_dataset,           # required
+    model_path=".models/my_model",  # required; _final and _best suffixes appended automatically
     run_name="run-1",               # optional
-    save_model="best",              # optional: "best" or "final"
-    seed=42,
     tracking=True,
     # Model-specific training kwargs (e.g. for MLP/CNN):
     lr=1e-4,
@@ -112,30 +170,33 @@ model.train(
     max_epochs=100,
     batch_size=256,
 )
+# Writes: .models/my_model_final (always) and .models/my_model_best (PyTorch only, on val improvement)
 
 # Quick iteration without MLflow
-model.train(train_data=train_dataset, tracking=False, max_epochs=5)
+model.train(train_data=train_dataset, val_data=val_dataset, model_path=".models/my_model", tracking=False, max_epochs=5)
 ```
 
 ### Evaluation
 ```python
 import numpy as np
-from protein_benchmark_models.utils import evaluate
+from protein_benchmark_models.utils import evaluate_regression
 
 X = np.stack([dataset[i]["one_hots"].numpy().flatten() for i in range(len(dataset))])
 y = dataset.targets.numpy()
 
-metrics = evaluate(model, X, y)
+metrics = evaluate_regression(model, X, y)
 # {"rmse": float, "r2": float, "spearmanr": float}
 ```
 
 ### Reproducibility
 
-Pass `seed=42` to `model.train()`. The seed is logged to MLflow automatically.
+Call `seed_everything()` before model construction. This seeds `random`, `numpy`, and `torch` for reproducible weight initialisation and training.
 
 ```python
 from protein_benchmark_models.utils import seed_everything
-seed_everything(42)  # Seeds random, numpy, and torch
+
+seed_everything(42)
+model = MLPRegressor(layer_dims=[..., 1])
 ```
 
 ### Model Authoring Guide
@@ -143,16 +204,17 @@ seed_everything(42)  # Seeds random, numpy, and torch
 #### Steps to add a new model
 
 1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`). For PyTorch models, initialize `lightning.Fabric` in `__init__` and use it for device/optimizer setup in `_fit()`
-2. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
-3. Register in `registry.py`
-4. Add lifecycle and get_params tests in `tests/test_models.py`
-
-You do **not** need to implement `get_params()` in most cases — see below.
+2. Set a `model_name: ClassVar[str]` class attribute matching the registry key
+3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
+4. Register in `registry.py`
+5. Add lifecycle and config tests in `tests/test_models.py`
 
 #### BaseModel Interface
 
 ```python
 class BaseModel(ABC):
+    model_name: ClassVar[str]  # must be set on each subclass
+
     # Public API — MLflow orchestration (set experiment, start run, log params, save artifact)
     def train(self, *, experiment_name, train_data, tracking=True, **kwargs) -> None
 
@@ -164,7 +226,7 @@ class BaseModel(ABC):
     def load(cls, path: str) -> BaseModel
 
     # Abstract — subclasses must implement
-    def _fit(self, train_data, val_data=None, **kwargs) -> None
+    def _fit(self, train_data, val_data, **kwargs) -> None
     def _save_weights(self, dir_path: str) -> None
     def _load_weights(self, dir_path: str) -> None
     def predict(self, X: np.ndarray) -> np.ndarray  # always returns shape (N,)
@@ -172,19 +234,13 @@ class BaseModel(ABC):
     # Log to MLflow (no-op when tracking=False) — use in _fit() instead of mlflow directly
     def log_param(self, key, value) -> None
     def log_metric(self, key, value, step=None) -> None
-
-    # Auto-populated from __init__ args via __init_subclass__ — no override needed
-    # Override only if automatic capture is insufficient (e.g. sklearn **kwargs)
-    def get_params(self) -> dict
 ```
 
 #### Automatic `__init__` param capture
 
-`BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments into `self._model_params`. This means `get_params()` works out of the box — you don't need to build param dicts manually or override it.
+`BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments into `self.config` (a plain dict). These are logged to MLflow automatically when `train()` is called — you don't need to build param dicts manually.
 
 Training-time arguments (`lr`, `batch_size`, `max_epochs`, etc.) are passed to `_fit()`, not `__init__()`, so they are **not** auto-captured. Log them manually inside `_fit()` using `self.log_param()`.
-
-Override `get_params()` only when auto-capture is insufficient — e.g. when `__init__` uses `**kwargs` to forward arguments to an underlying library that has its own defaults (see `ridge_regressor.py` for an example).
 
 ## Datasets
 
@@ -246,18 +302,73 @@ All FLIP2 tasks are sourced from [Zenodo record 18433203](https://zenodo.org/rec
 | `hydro` | `three_to_many`, `low_to_high`, `to_P06241`, `to_P0A9X9`, `to_P01053`, `random_split` |
 | `rhomax` | `by_wild_type` |
 
-## Local Services (MinIO + MLflow)
+## Services (MinIO + MLflow)
 
-Start MinIO (S3-compatible storage) and MLflow (experiment tracking) via Docker Compose:
+MLflow (experiment tracking) and MinIO (S3-compatible artifact storage) are run via the same `docker-compose.yaml` in both local and remote setups. The only difference is the `.env` file. See `.env.example` for both configurations.
+
+### Option A — Local (Docker Desktop)
 
 ```bash
 docker compose up -d
 ```
 
 - **MLflow UI:** [http://localhost:5000](http://localhost:5000)
-- **MinIO Console:** [http://localhost:7001](http://localhost:7001) (login: `minioadmin`/`minioadmin`)
+- **MinIO console:** [http://localhost:7001](http://localhost:7001) (login: `minioadmin`/`minioadmin`)
 
-Stop services with `docker compose down`. Data persists in Docker volumes across restarts.
+Stop with `docker compose down`. Data persists in Docker volumes.
+
+### Option B — Remote (GCE VM)
+
+A persistent GCE VM (`e2-medium`, `us-central1-a`) runs the same `docker-compose.yaml` with a reserved static IP. This allows training jobs running anywhere (local, Modal, GKE) to log to a shared MLflow server.
+
+```bash
+# Start VM
+gcloud compute instances start mlflow-server --zone us-central1-a
+
+# Stop VM when not in use (no compute charge while stopped)
+gcloud compute instances stop mlflow-server --zone us-central1-a
+
+# SSH in
+gcloud compute ssh mlflow-server --zone us-central1-a
+```
+
+To deploy from scratch on a new VM:
+
+```bash
+# 1. Create VM
+gcloud compute instances create mlflow-server \
+  --zone us-central1-a \
+  --machine-type e2-medium \
+  --image-family debian-12 \
+  --image-project debian-cloud \
+  --tags mlflow-server \
+  --boot-disk-size 20GB
+
+# 2. Open ports
+gcloud compute firewall-rules create allow-mlflow-minio \
+  --allow tcp:5000,tcp:7000,tcp:7001 \
+  --target-tags mlflow-server
+
+# 3. Reserve and attach a static IP
+gcloud compute addresses create mlflow-server-ip --region us-central1
+gcloud compute instances delete-access-config mlflow-server --access-config-name "external-nat" --zone us-central1-a
+gcloud compute instances add-access-config mlflow-server --access-config-name "external-nat" \
+  --address $(gcloud compute addresses describe mlflow-server-ip --region us-central1 --format='get(address)') \
+  --zone us-central1-a
+
+# 4. Install Docker, copy docker-compose.yaml, create .env, start services
+gcloud compute ssh mlflow-server --zone us-central1-a
+# On the VM:
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER && newgrp docker
+# Copy docker-compose.yaml to the VM (from local):
+# gcloud compute scp docker-compose.yaml mlflow-server:~/docker-compose.yaml --zone us-central1-a
+docker compose up -d
+```
+
+Update `.env` locally to point at the VM's static IP (see `.env.example` Option B).
+
+> **Security note:** MLflow and MinIO are exposed publicly with no authentication. Acceptable for private R&D; restrict firewall rules to known IPs for shared use.
 
 ## Docker
 
@@ -269,44 +380,36 @@ docker build -t preprocess-job -f docker/preprocess/Dockerfile .
 docker build -t train-job -f docker/train/Dockerfile .
 docker build -t serve-job -f docker/serve/Dockerfile .
 
-# Run a training job (reads data via S3, saves model to S3, logs to MLflow)
-docker run --env-file .env \
-  -e S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-  -e MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:7000 \
-  -v $(pwd)/configs:/app/configs \
-  train-job --config configs/<your_config>.json
+# Run a training job — S3 and MLflow endpoints are read from .env
+docker run --env-file .env train-job --config configs/remote/<your_config>.json
 ```
 
-> `--env-file .env` loads S3 and MLflow credentials. On Linux, add `--add-host=host.docker.internal:host-gateway` to resolve the host from inside the container.
+> When running against a local Docker Compose stack on macOS/Windows, replace `localhost` with `host.docker.internal` in your `.env` so the container can reach services on the host (e.g. `S3_ENDPOINT_URL=http://host.docker.internal:7000`). On Linux, also add `--add-host=host.docker.internal:host-gateway`. When using the remote GCE setup, `.env` already has the correct public IP and no changes are needed.
 
-## Argo Workflows
+## Remote GPU Training
 
-Argo Workflow pipelines live in `argo/` and are intended for orchestrating multi-step training runs on Kubernetes (e.g. preprocess → train). See [argo/README.md](argo/README.md) for details.
+### Modal (development)
+
+Run any training config on a GPU without managing infrastructure. Data is read from MinIO and results logged to MLflow — identical flow to local training.
 
 ```bash
-# First-time: install Argo Workflows on Docker Desktop's K8s cluster
-kubectl create namespace argo
-kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
+uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
+```
 
-# First-time: create S3 credentials secret and configs config map
-source .env && kubectl create secret generic s3-credentials --namespace argo \
-  --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-kubectl create configmap training-configs --namespace argo --from-file=configs/
+See [modal/README.md](modal/README.md) for prerequisites and setup.
 
-# Submit a pipeline
-argo submit -n argo argo/train-pipeline.yaml --watch
+### Argo Workflows on GKE (production-style)
+
+Argo Workflow pipelines live in `argo/` and run training jobs as K8s pods on a GKE cluster with T4 spot GPU nodes. See [argo/README.md](argo/README.md) for full cluster setup and image push instructions.
+
+```bash
+# Submit a training run (configs are baked into the training image)
+argo submit -n argo argo/train-pipeline.yaml \
+  -p config=configs/remote/tape_fluorescence_mlp_regressor.json --watch
 
 # Argo UI (optional)
 kubectl port-forward -n argo svc/argo-server 2746:2746
 # Then open https://localhost:2746
-```
-
-To update the configs config map after changing files locally:
-
-```bash
-kubectl create configmap training-configs --namespace argo --from-file=configs/ --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ## Testing
@@ -319,4 +422,12 @@ Tests use `tracking=False` to skip MLflow — no external services needed. They 
 
 When adding a new model, add matching tests in `tests/test_models.py` following the existing pattern:
 - **`test_lifecycle`** — create, train (`tracking=False`), predict (check output shape), save, load, predict again (outputs match)
-- **`test_get_params`** — verify `get_params()` returns the expected keys and values
+- **`test_config`** — verify `model.config` contains the expected keys and values
+
+## TODO
+
+- [x] Add 1D CNN baseline model over tokenized sequences
+- [x] Onboard FLIP2 tasks and run baselines
+- [ ] Add pretrained protein LLM embedding models (ESM, etc.)
+- [ ] Train baselines to convergence on all FLIP2 splits
+- [ ] Wire up Docker training image and Argo pipeline for GPU training runs

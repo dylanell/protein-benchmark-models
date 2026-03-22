@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset
 
-from protein_benchmark_models.data.base import BaseDataset
+from .base import BaseDataset
 
 
 @dataclass
@@ -25,7 +25,9 @@ class TabularDataset(BaseDataset):
     label_encoder: LabelEncoder | None = None
 
     @classmethod
-    def from_csv(cls, path: str, target_column: str, storage_options: dict | None = None) -> TabularDataset:
+    def from_csv(
+        cls, path: str, target_column: str, storage_options: dict | None = None
+    ) -> TabularDataset:
         """Load dataset from CSV file (local or S3)."""
         df = pd.read_csv(path, storage_options=storage_options or {})
 
@@ -68,12 +70,16 @@ class TabularDataset(BaseDataset):
         )
         return train, test
 
-    def to_pytorch(self, batch_size: int = 32, shuffle: bool = True) -> DataLoader:
+    def to_pytorch(
+        self, batch_size: int = 32, shuffle: bool = True
+    ) -> DataLoader:
         """Convert to PyTorch DataLoader."""
         X_tensor = torch.from_numpy(self.X).float()
         y_tensor = torch.from_numpy(self.y).long()
         tensor_dataset = TensorDataset(X_tensor, y_tensor)
-        return DataLoader(tensor_dataset, batch_size=batch_size, shuffle=shuffle)
+        return DataLoader(
+            tensor_dataset, batch_size=batch_size, shuffle=shuffle
+        )
 
     def __len__(self) -> int:
         """Return the number of samples."""

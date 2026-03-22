@@ -22,6 +22,7 @@ def get_storage_options(path: str = "") -> dict:
 def get_s3_filesystem():
     """Return a configured s3fs.S3FileSystem instance."""
     import s3fs
+
     return s3fs.S3FileSystem(
         endpoint_url=os.environ["S3_ENDPOINT_URL"],
         key=os.environ["AWS_ACCESS_KEY_ID"],

@@ -1,68 +1,154 @@
-# Argo Workflows
+# Argo Workflows — GPU Training on GKE
 
-Run the full pipeline (preprocess → train) as an Argo Workflow DAG on a local Docker Desktop K8s cluster. Argo handles sequencing and dependency management.
+Run training jobs as Argo Workflows on a GKE cluster with T4 GPU spot nodes.
+Data is read from MinIO (S3-compatible), results logged to MLflow — both running
+on the `mlflow-server` GCE VM.
 
 ## Prerequisites
 
-1. **Docker Desktop** with Kubernetes enabled (Settings > Kubernetes > Enable)
-2. **Local services running**: `docker compose up -d` (MinIO + MLflow)
-3. **Images built locally**:
-   ```bash
-   docker build -t preprocessing-job -f docker/preprocess-iris-dataset/Dockerfile .
-   docker build -t training-job -f docker/train-iris-classifier/Dockerfile .
-   ```
-4. **Data onboarded to S3**: `uv run python scripts/onboard_iris_dataset.py --dest s3://data/iris/`
-5. **Argo CLI installed**: `brew install argo`
+- `gcloud` CLI authenticated (`gcloud auth login`)
+- `kubectl` installed
+- `argo` CLI installed (`brew install argo`)
+- Docker installed (for building and pushing the training image)
+- `.env` populated with MinIO and MLflow credentials (see `.env.example`)
 
-## First-Time Setup
+## One-Time GKE Setup
 
-Install Argo Workflows and create the Secret and ConfigMap in the `argo` namespace:
+### 1. Enable required APIs
 
 ```bash
-# Install Argo Workflows (use --server-side to avoid CRD size limits)
+gcloud services enable container.googleapis.com artifactregistry.googleapis.com
+```
+
+### 2. Create the GKE cluster
+
+```bash
+gcloud container clusters create protein-benchmark \
+  --zone us-central1-a \
+  --num-nodes 1 \
+  --machine-type e2-small \
+  --no-enable-autoupgrade
+```
+
+The default node pool is CPU-only (for Argo control plane pods). GPU nodes are a separate pool.
+
+### 3. Create the GPU spot node pool (scales to 0 when idle)
+
+```bash
+gcloud container node-pools create gpu-spot \
+  --cluster protein-benchmark \
+  --zone us-central1-a \
+  --machine-type n1-standard-4 \
+  --accelerator type=nvidia-tesla-t4,count=1,gpu-driver-installation-config=google-managed \
+  --spot \
+  --num-nodes 0 \
+  --enable-autoscaling \
+  --min-nodes 0 \
+  --max-nodes 2
+```
+
+The `google-managed` GPU driver flag tells GKE to automatically install NVIDIA drivers.
+
+### 4. Get cluster credentials
+
+```bash
+gcloud container clusters get-credentials protein-benchmark --zone us-central1-a
+```
+
+### 5. Install Argo Workflows
+
+```bash
 kubectl create namespace argo
-kubectl apply -n argo --server-side -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
+kubectl apply -n argo --server-side \
+  -f https://github.com/argoproj/argo-workflows/releases/latest/download/quick-start-minimal.yaml
+```
 
-# Create secret and config map in the argo namespace
-source .env && kubectl create secret generic s3-credentials --namespace argo \
+### 6. Create the credentials secret
+
+All five env vars from `.env` are needed so the training container can reach MinIO and MLflow:
+
+```bash
+source .env && kubectl create secret generic mlflow-minio-credentials \
+  --namespace argo \
   --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-kubectl create configmap training-configs --namespace argo --from-file=configs/
+  --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+  --from-literal=MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI \
+  --from-literal=S3_ENDPOINT_URL=$S3_ENDPOINT_URL \
+  --from-literal=MLFLOW_S3_ENDPOINT_URL=$MLFLOW_S3_ENDPOINT_URL
 ```
 
-To update configs after changing them locally:
+### 7. Create the Artifact Registry repository
 
 ```bash
-kubectl create configmap training-configs --namespace argo --from-file=configs/ --dry-run=client -o yaml | kubectl apply -f -
+gcloud artifacts repositories create protein-benchmark \
+  --repository-format docker \
+  --location us-central1
 ```
 
-## Usage
+### 8. Build and push the training image
 
-### Submit a Pipeline
+Your GCP project ID is `modular-scout-486816-g3`:
 
 ```bash
-# Uses MLP config by default
-argo submit -n argo argo/iris-classifier-pipeline.yaml --watch
+gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# Or specify a different config via -p
-argo submit -n argo argo/iris-classifier-pipeline.yaml -p config=configs/iris_gb_classifier.json --watch
+docker build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/modular-scout-486816-g3/protein-benchmark/train:latest \
+  -f docker/train/Dockerfile .
+
+docker push us-central1-docker.pkg.dev/modular-scout-486816-g3/protein-benchmark/train:latest
 ```
 
-### Argo UI (Optional)
+Update the `image` field in `argo/train-pipeline.yaml` to match your `PROJECT_ID`.
+
+## Submitting a Training Run
+
+### Config requirements
+
+Configs used for remote training must reference data via S3 URIs, not local paths.
+Update `data.train_path` and `data.valid_path` in your config to point to MinIO:
+
+```json
+"data": {
+    "train_path": "s3://data/tape/fluorescence/train.csv",
+    "valid_path": "s3://data/tape/fluorescence/valid.csv",
+    "dataset_type": "one_hot"
+}
+```
+
+### Submit
+
+```bash
+# Use the default config (tape_fluorescence_mlp_regressor.json)
+argo submit -n argo argo/train-pipeline.yaml --watch
+
+# Or specify a different config
+argo submit -n argo argo/train-pipeline.yaml \
+  -p config=configs/remote/tape_fluorescence_cnn_regressor.json \
+  --watch
+```
+
+### Argo UI
 
 ```bash
 kubectl port-forward -n argo svc/argo-server 2746:2746
 ```
 
-Then open [https://localhost:2746](https://localhost:2746) for a visual workflow dashboard.
+Then open https://localhost:2746 for a visual workflow dashboard.
+
+## Cost Notes
+
+- GPU spot T4 node: ~$0.28/hr (VM + GPU). The pool scales to 0 when no jobs are running.
+- CPU default node pool (e2-small): ~$0.017/hr — always running while cluster exists.
+- Delete the cluster when not in use for an extended period:
+  ```bash
+  gcloud container clusters delete protein-benchmark --zone us-central1-a
+  ```
 
 ## How It Works
 
-- The pipeline accepts a `config` parameter (`-p config=...`) so one workflow file handles any model config
-- A Workflow defines a DAG of pipeline steps. Each step runs as a pod, with Argo automatically sequencing based on `dependencies`
-- Workflows run in the `argo` namespace, so the S3 Secret and configs ConfigMap must be created there separately from the `default` namespace
-- `generateName` allows resubmitting without deleting previous runs — each run gets a unique suffix
-- Argo's emissary executor can't look up entrypoints from local-only images, so container specs must include an explicit `command`
-- Data and model artifacts are stored in S3 (MinIO locally) — pipeline stages read/write via the S3 API
-- Training configs are stored in a ConfigMap and mounted at `/app/configs`, overriding the baked-in defaults from the Docker image
-- S3 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are stored in a K8s Secret (`s3-credentials`) and injected via `envFrom`. Endpoint URLs are plain env vars in the workflow spec
+- Each `argo submit` creates a K8s Pod on the GPU spot node pool
+- The Pod runs `scripts/train.py --config <config>` inside the training container
+- Data is read from MinIO via S3 API (resolved by `get_storage_options()` when path starts with `s3://`)
+- MLflow run is logged to the `mlflow-server` VM at the URI in `MLFLOW_TRACKING_URI`
+- `generateName` gives each run a unique suffix — resubmit without conflicts

@@ -20,7 +20,9 @@ class FullyConnected(nn.Module):
 
         layers = []
         for i in range(len(layer_dims) - 1):
-            layers.append(nn.Linear(layer_dims[i], layer_dims[i + 1], bias=use_bias))
+            layers.append(
+                nn.Linear(layer_dims[i], layer_dims[i + 1], bias=use_bias)
+            )
 
             if i == len(layer_dims) - 2:
                 layers.append(getattr(nn, output_activation)())
