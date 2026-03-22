@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import tempfile
+from typing import ClassVar
 import numpy as np
 
 import mlflow
@@ -18,18 +19,21 @@ from torch.utils.data import Dataset
 class BaseModel(ABC):
     """Abstract base class for all models.
 
+    Subclasses must define a class-level `model_name` string that matches
+    the key used to register them in ModelRegistry.
+
     Uses the template method pattern: train() handles MLflow orchestration
     and delegates to _fit() for model-specific training logic.
 
-    Model params are captured automatically: any argument passed to __init__
-    at any level of the inheritance chain is recorded in self._model_params.
-    These are logged to MLflow automatically when train() is called.
-    Subclasses do NOT need to manually build param dicts or override get_params().
+    Constructor arguments are captured automatically into self.config after
+    __init__ runs. These are logged to MLflow when train() is called.
     """
+
+    model_name: ClassVar[str]
 
     # --- Automatic __init__ arg capture ---
     # When a subclass defines __init__, this hook wraps it so that all arguments
-    # are recorded into self._model_params after the original __init__ runs.
+    # are recorded into self.config after the original __init__ runs.
     # This works across the full inheritance chain: e.g. MLPRegressor.__init__
     # captures both fabric args (from the super().__init__ call) and its own
     # architecture args in a single flat dict.
@@ -37,10 +41,10 @@ class BaseModel(ABC):
         super().__init_subclass__(**kwargs)
 
         # Only wrap classes that define their own __init__
-        if '__init__' not in cls.__dict__:
+        if "__init__" not in cls.__dict__:
             return
 
-        original_init = cls.__dict__['__init__']
+        original_init = cls.__dict__["__init__"]
 
         @functools.wraps(original_init)
         def wrapped_init(self, *args, **kw):
@@ -55,35 +59,33 @@ class BaseModel(ABC):
             bound.apply_defaults()
 
             # Build a flat dict of params, unpacking **kwargs if present
-            # (e.g. __init__(self, **kwargs) -> unpack kwargs into individual keys
-            # rather than storing {"kwargs": {...}})
+            # (e.g. __init__(self, **kwargs) -> unpack kwargs into individual
+            # keys rather than storing {"kwargs": {...}})
             params = {}
             for k, v in bound.arguments.items():
-                if k == 'self':
+                if k == "self":
                     continue
                 if sig.parameters[k].kind == inspect.Parameter.VAR_KEYWORD:
                     params.update(v)
                 else:
                     params[k] = v
 
-            # Merge this level's params into _model_params (parent params
+            # Merge this level's params into config (parent params
             # were already set by the parent's wrapped __init__)
-            if not hasattr(self, '_model_params'):
-                self._model_params = {}
-            self._model_params.update(params)
+            if not hasattr(self, "config"):
+                self.config = {}
+            self.config.update(params)
 
         cls.__init__ = wrapped_init
-
-    def get_params(self) -> dict:
-        """Return model parameters for logging. Automatically populated from __init__ args."""
-        return self._model_params
 
     def log_param(self, key: str, value) -> None:
         """Log a parameter to MLflow if tracking is enabled."""
         if self._tracking:
             mlflow.log_param(key, value)
 
-    def log_metric(self, key: str, value: float, step: int | None = None) -> None:
+    def log_metric(
+        self, key: str, value: float, step: int | None = None
+    ) -> None:
         """Log a metric to MLflow if tracking is enabled."""
         if self._tracking:
             mlflow.log_metric(key, value, step=step)
@@ -107,10 +109,11 @@ class BaseModel(ABC):
             train_data: Training dataset
             val_data: Validation dataset
             run_name: Optional MLflow run name
-            model_path: Base path for model artifacts. Two directories are written:
-                model_path + "_final" (always, after training completes) and
-                model_path + "_best" (iterative models only, updated whenever val loss
-                improves). Both are logged to MLflow when tracking is enabled.
+            model_path: Base path for model artifacts. Two directories are
+                written: model_path + "_final" (always, after training
+                completes) and model_path + "_best" (iterative models only,
+                updated whenever val loss improves). Both are logged to MLflow
+                when tracking is enabled.
             extra_params: Optional extra params to log (e.g. data config)
             tracking: Whether to enable MLflow tracking (default True)
             **train_kwargs: Model-specific training arguments passed to _fit()
@@ -119,23 +122,27 @@ class BaseModel(ABC):
 
         # Resolve the local path that _fit() will use for checkpointing.
         #
-        # _fit() only ever writes to a local filesystem path — it has no knowledge of S3.
-        # When the final destination is a local path, we pass it through unchanged.
-        # When the final destination is an S3 path, we create a temporary local directory
-        # for _fit() to checkpoint into, then do a single upload to S3 after training
-        # completes. This avoids paying the cost of an S3 write on every checkpoint.
+        # _fit() only ever writes to a local filesystem path — it has no
+        # knowledge of S3. When the final destination is a local path, we pass
+        # it through unchanged. When the final destination is an S3 path, we
+        # create a temporary local directory for _fit() to checkpoint into,
+        # then do a single upload to S3 after training completes. This avoids
+        # paying the cost of an S3 write on every checkpoint.
         #
-        # ExitStack lets us conditionally enter the TemporaryDirectory context only for
-        # the S3 case, while keeping a single unified code path below.
+        # ExitStack lets us conditionally enter the TemporaryDirectory context
+        # only for the S3 case, while keeping a single unified code path below.
         with contextlib.ExitStack() as stack:
             if model_path.startswith("s3://"):
                 tmp_dir = stack.enter_context(tempfile.TemporaryDirectory())
-                checkpoint_path = os.path.join(tmp_dir, os.path.basename(model_path))
+                checkpoint_path = os.path.join(
+                    tmp_dir, os.path.basename(model_path)
+                )
             else:
                 checkpoint_path = model_path
 
-            # Forward the resolved checkpoint path to _fit() so iterative models
-            # can save best-val-loss checkpoints to checkpoint_path + "_best".
+            # Forward the resolved checkpoint path to _fit() so iterative
+            # models can save best-val-loss checkpoints to
+            # checkpoint_path + "_best".
             fit_kwargs = dict(train_kwargs)
             fit_kwargs["model_path"] = checkpoint_path
 
@@ -143,33 +150,54 @@ class BaseModel(ABC):
                 self._fit(train_data, val_data=val_data, **fit_kwargs)
                 self.save(checkpoint_path + "_final")
                 if checkpoint_path != model_path:
-                    from protein_benchmark_models.utils import get_s3_filesystem
+                    from ..utils import get_s3_filesystem
+
                     fs = get_s3_filesystem()
-                    fs.put(checkpoint_path + "_final", model_path + "_final", recursive=True)
+                    fs.put(
+                        checkpoint_path + "_final",
+                        model_path + "_final",
+                        recursive=True,
+                    )
                     if os.path.exists(checkpoint_path + "_best"):
-                        fs.put(checkpoint_path + "_best", model_path + "_best", recursive=True)
+                        fs.put(
+                            checkpoint_path + "_best",
+                            model_path + "_best",
+                            recursive=True,
+                        )
                 return
 
             mlflow.set_experiment(experiment_name)
             with mlflow.start_run(run_name=run_name):
-                # Log architecture params (auto-captured from __init__ by BaseModel).
-                mlflow.log_params(self.get_params())
+                # Log architecture params (auto-captured from __init__) and
+                # model_name.
+                mlflow.log_params(
+                    {"model_name": self.model_name, **self.config}
+                )
 
                 # Log any caller-supplied params (e.g. data config).
                 if extra_params:
                     mlflow.log_params(extra_params)
 
-                # Training hyperparams (lr, batch_size, etc.) are logged manually
-                # inside _fit() via self.log_param().
+                # Training hyperparams (lr, batch_size, etc.) are logged
+                # manually inside _fit() via self.log_param().
                 self._fit(train_data, val_data=val_data, **fit_kwargs)
 
                 self.save(checkpoint_path + "_final")
                 if checkpoint_path != model_path:
-                    from protein_benchmark_models.utils import get_s3_filesystem
+                    from ..utils import get_s3_filesystem
+
                     fs = get_s3_filesystem()
-                    fs.put(checkpoint_path + "_final", model_path + "_final", recursive=True)
+                    fs.put(
+                        checkpoint_path + "_final",
+                        model_path + "_final",
+                        recursive=True,
+                    )
                     if os.path.exists(checkpoint_path + "_best"):
-                        fs.put(checkpoint_path + "_best", model_path + "_best", recursive=True)
+                        fs.put(
+                            checkpoint_path + "_best",
+                            model_path + "_best",
+                            recursive=True,
+                        )
                 mlflow.log_artifact(checkpoint_path + "_final")
                 if os.path.exists(checkpoint_path + "_best"):
                     mlflow.log_artifact(checkpoint_path + "_best")
@@ -185,17 +213,16 @@ class BaseModel(ABC):
         raise NotImplementedError
 
     def save(self, path: str) -> str:
-        """Save model to a directory with config.json and weights. Returns the directory path."""
-        from protein_benchmark_models.models.registry import ModelRegistry
-
+        """Save model to directory with config.json and weights."""
         os.makedirs(path, exist_ok=True)
 
-        config = {
-            "model_name": ModelRegistry.get_name(type(self)),
-            "model_params": self.get_params(),
-        }
         with open(os.path.join(path, "config.json"), "w") as f:
-            json.dump(config, f, indent=2, default=str)
+            json.dump(
+                {"model_name": self.model_name, "model_params": self.config},
+                f,
+                indent=2,
+                default=str,
+            )
 
         self._save_weights(path)
         return path
@@ -207,7 +234,7 @@ class BaseModel(ABC):
 
     @classmethod
     def load(cls, path: str) -> BaseModel:
-        """Load a model from a saved directory. Returns a new instance with weights loaded."""
+        """Load a model from a saved directory."""
         with open(os.path.join(path, "config.json")) as f:
             config = json.load(f)
         instance = cls(**config["model_params"])

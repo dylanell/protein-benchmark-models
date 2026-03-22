@@ -1,6 +1,5 @@
 """PyTorch CNN sequence regressor."""
 
-
 from __future__ import annotations
 
 from typing import Literal, Any
@@ -16,13 +15,16 @@ from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from protein_benchmark_models.data import TokenizedSequenceDataset
-from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.modules.sequence_cnn import SequenceCNN
-from protein_benchmark_models.utils import evaluate, seed_everything
+from ..data import TokenizedSequenceDataset
+from .base import BaseModel
+from ..modules.sequence_cnn import SequenceCNN
+from ..utils import evaluate_regression
+
 
 class CNNRegressor(BaseModel):
     """Sequence regressor model using 1D CNNs."""
+
+    model_name = "cnn_regressor"
 
     def __init__(
         self,
@@ -35,30 +37,15 @@ class CNNRegressor(BaseModel):
         output_activation: str = "Identity",
         use_bias: bool = True,
         norm: Literal["batch", "layer"] | None = None,
-        seed: int | None = None,
         accelerator: str | Accelerator = "auto",
         strategy: str | Strategy = "auto",
         devices: list[int] | str | int = "auto",
         precision: str | int = "32-true",
         plugins: str | Any | None = None,
         callbacks: list[Any] | Any | None = None,
-        loggers: Logger | list[Logger] | None = None
+        loggers: Logger | list[Logger] | None = None,
     ):
         super().__init__()
-        self.seed = seed
-        if seed is not None:
-            seed_everything(seed)
-
-        # Initialize fabric
-        self.fabric = L.Fabric(
-            accelerator=accelerator,
-            strategy=strategy,
-            devices=devices,
-            precision=precision,
-            plugins=plugins,
-            callbacks=callbacks,
-            loggers=loggers
-        )
 
         self.seq_length = seq_length
 
@@ -71,10 +58,21 @@ class CNNRegressor(BaseModel):
             hidden_activation=hidden_activation,
             output_activation=output_activation,
             use_bias=use_bias,
-            norm=norm
+            norm=norm,
         )
 
         self.loss_fcn = nn.MSELoss()
+
+        # Initialize fabric
+        self.fabric = L.Fabric(
+            accelerator=accelerator,
+            strategy=strategy,
+            devices=devices,
+            precision=precision,
+            plugins=plugins,
+            callbacks=callbacks,
+            loggers=loggers,
+        )
 
     def _fit(
         self,
@@ -87,11 +85,8 @@ class CNNRegressor(BaseModel):
         batch_size: int = 32,
         max_epochs: int = 100,
         val_frequency: int = 1,
-        patience: int = -1
+        patience: int = -1,
     ):
-        if self.seed is not None:
-            seed_everything(self.seed)
-
         # Log training parameters
         self.log_param("lr", lr)
         self.log_param("weight_decay", weight_decay)
@@ -102,13 +97,19 @@ class CNNRegressor(BaseModel):
         self.log_param("patience", patience)
 
         # Initialize optimizer and fabric
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=lr, weight_decay=weight_decay
+        )
         model, optimizer = self.fabric.setup(self.model, optimizer)
 
         # Initialize dataloaders
-        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        train_dataloader = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True
+        )
         train_dataloader = self.fabric.setup_dataloaders(train_dataloader)
-        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+        val_dataloader = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False
+        )
         val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
 
         epochs_without_improvement = 0
@@ -156,17 +157,23 @@ class CNNRegressor(BaseModel):
                     epochs_without_improvement += 1
 
                 if epochs_without_improvement == patience:
-                    print(f"{patience} epochs reached without improvement. Early stopping.")
+                    print(
+                        f"{patience} epochs reached without improvement. Early stopping."
+                    )
                     break
 
-            status = f"Epoch: {epoch+1}/{max_epochs} | train_loss: {train_loss:.4f} | "\
+            status = (
+                f"Epoch: {epoch + 1}/{max_epochs} | train_loss: {train_loss:.4f} | "
                 f"val_loss: {val_loss:.4f} | best_val_loss: {best_val_loss:.4f}"
+            )
             pbar.set_description(status)
 
         # Final validation metrics
-        X = np.stack([val_data[i]["tokens"].numpy() for i in range(len(val_data))])
+        X = np.stack(
+            [val_data[i]["tokens"].numpy() for i in range(len(val_data))]
+        )
         y = val_data.targets.numpy()
-        metrics = evaluate(self, X, y)
+        metrics = evaluate_regression(self, X, y)
         for k, v in metrics.items():
             self.log_metric(f"val_{k}", v)
         print(f"[cnn_regressor] Valid RMSE: {metrics['rmse']:.04f}")
@@ -184,10 +191,12 @@ class CNNRegressor(BaseModel):
         with torch.no_grad():
             output = self.model(X_tensor)
         return output.squeeze(-1).cpu().numpy()
-    
+
     def _save_weights(self, dir_path: str) -> None:
         """Save model state dict to directory."""
-        self.fabric.save(os.path.join(dir_path, "model.pt"), {"model": self.model})
+        self.fabric.save(
+            os.path.join(dir_path, "model.pt"), {"model": self.model}
+        )
 
     def _load_weights(self, dir_path: str) -> None:
         """Load model state dict from directory."""

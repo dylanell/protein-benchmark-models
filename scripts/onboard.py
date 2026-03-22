@@ -18,6 +18,7 @@ Output structure for FLIP2:
     .data/<task>/<split>/test.csv
 """
 
+import logging
 import argparse
 import io
 import json
@@ -32,6 +33,10 @@ from protein_benchmark_models.utils import get_s3_filesystem
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+_SCRIPT = "onboard.py"
 TAPE_BASE = "http://s3.amazonaws.com/songlabdata/proteindata/data_raw_pytorch"
 ZENODO_BASE = "https://zenodo.org/records/18433203/files"
 
@@ -112,10 +117,10 @@ def onboard_tape_task(task_name: str, dest: str) -> None:
     target_field = task["target_field"]
     extra_fields = task["extra_fields"]
 
-    print(f"Downloading {task_name} from {url} ...")
+    logger.info(f"[{_SCRIPT}] Downloading {task_name} from {url} ...")
     with urllib.request.urlopen(url) as response:
         tar_bytes = response.read()
-    print(f"Downloaded {len(tar_bytes) / 1_000_000:.1f} MB")
+    logger.info(f"[{_SCRIPT}] Downloaded {len(tar_bytes) / 1_000_000:.1f} MB")
 
     dest = dest.rstrip("/")
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
@@ -124,7 +129,7 @@ def onboard_tape_task(task_name: str, dest: str) -> None:
             df = parse_tape_json(f.read(), target_field, extra_fields)
             out_path = f"{dest}/{split}.csv"
             write_df(df, out_path)
-            print(f"Saved {split}.csv ({len(df):,} rows) → {out_path}")
+            logger.info(f"[{_SCRIPT}] Saved {split}.csv ({len(df):,} rows) to {out_path}")
 
 
 def onboard_flip2_task(task_name: str, dest: str) -> None:
@@ -140,10 +145,10 @@ def onboard_flip2_task(task_name: str, dest: str) -> None:
 
     for split in splits:
         url = f"{ZENODO_BASE}/{task_name}/{split}.csv.gz?download=1"
-        print(f"Downloading {task_name}/{split} from {url} ...")
+        logger.info(f"[{_SCRIPT}] Downloading {task_name}/{split} from {url} ...")
         with urllib.request.urlopen(url) as response:
             data = response.read()
-        print(f"Downloaded {len(data) / 1_000_000:.1f} MB")
+        logger.info(f"[{_SCRIPT}] Downloaded {len(data) / 1_000_000:.1f} MB")
 
         df = pd.read_csv(io.BytesIO(data), compression="gzip")
 
@@ -155,7 +160,7 @@ def onboard_flip2_task(task_name: str, dest: str) -> None:
         for split_name, split_df in [("train", train_df), ("valid", valid_df), ("test", test_df)]:
             out_path = f"{split_dest}/{split_name}.csv"
             write_df(split_df, out_path)
-            print(f"Saved {split_name}.csv ({len(split_df):,} rows) → {out_path}")
+            logger.info(f"[{_SCRIPT}] Saved {split_name}.csv ({len(split_df):,} rows) to {out_path}")
 
 
 def main():

@@ -8,7 +8,6 @@ Each model has two tests:
 
 import json
 import os
-import tempfile
 
 import numpy as np
 
@@ -21,62 +20,73 @@ N = len(SEQUENCES)  # 8
 
 
 class TestRidgeRegressor:
-    def test_lifecycle(self, onehot_data):
-        with tempfile.TemporaryDirectory() as tmp:
-            model = RidgeRegressor(alpha=1.0)
-            model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model")
+    # tmp_path is a built-in pytest fixture that provides a temporary directory
+    # unique to each test invocation, automatically cleaned up afterwards.
+    def test_lifecycle(self, onehot_data, tmp_path):
+        model = RidgeRegressor(alpha=1.0)
+        model.train(
+            train_data=onehot_data,
+            val_data=onehot_data,
+            tracking=False,
+            model_path=str(tmp_path / "model"),
+        )
 
-            assert os.path.isdir(f"{tmp}/model_final")
-            assert os.path.exists(f"{tmp}/model_final/config.json")
-            assert os.path.exists(f"{tmp}/model_final/model.joblib")
+        assert os.path.isdir(tmp_path / "model_final")
+        assert os.path.exists(tmp_path / "model_final" / "config.json")
+        assert os.path.exists(tmp_path / "model_final" / "model.joblib")
 
-            with open(f"{tmp}/model_final/config.json") as f:
-                config = json.load(f)
-            assert config["model_name"] == "ridge_regressor"
+        with open(tmp_path / "model_final" / "config.json") as f:
+            config = json.load(f)
+        assert config["model_name"] == "ridge_regressor"
 
-            X = onehot_X(onehot_data)
-            preds = model.predict(X)
-            assert preds.shape == (N,)
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
 
-            model2 = RidgeRegressor.load(f"{tmp}/model_final")
-            preds2 = model2.predict(X)
-            np.testing.assert_array_equal(preds, preds2)
+        model2 = RidgeRegressor.load(str(tmp_path / "model_final"))
+        preds2 = model2.predict(X)
+        np.testing.assert_array_equal(preds, preds2)
 
-    def test_get_params(self):
+    def test_config(self):
         model = RidgeRegressor(alpha=2.0)
-        params = model.get_params()
-        assert params["alpha"] == 2.0
+        assert model.config["alpha"] == 2.0
 
 
 class TestMLPRegressor:
-    def test_lifecycle(self, onehot_data):
-        with tempfile.TemporaryDirectory() as tmp:
-            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
-            model.train(train_data=onehot_data, val_data=onehot_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
+    LAYER_DIMS = [SEQ_LEN * VOCAB_SIZE, 16, 1]
 
-            assert os.path.isdir(f"{tmp}/model_final")
-            assert os.path.exists(f"{tmp}/model_final/config.json")
-            assert os.path.exists(f"{tmp}/model_final/model.pt")
+    def test_lifecycle(self, onehot_data, tmp_path):
+        model = MLPRegressor(layer_dims=self.LAYER_DIMS)
+        model.train(
+            train_data=onehot_data,
+            val_data=onehot_data,
+            tracking=False,
+            model_path=str(tmp_path / "model"),
+            max_epochs=5,
+        )
 
-            with open(f"{tmp}/model_final/config.json") as f:
-                config = json.load(f)
-            assert config["model_name"] == "mlp_regressor"
-            assert config["model_params"]["layer_dims"] == [SEQ_LEN * VOCAB_SIZE, 16, 1]
+        assert os.path.isdir(tmp_path / "model_final")
+        assert os.path.exists(tmp_path / "model_final" / "config.json")
+        assert os.path.exists(tmp_path / "model_final" / "model.pt")
 
-            X = onehot_X(onehot_data)
-            preds = model.predict(X)
-            assert preds.shape == (N,)
+        with open(tmp_path / "model_final" / "config.json") as f:
+            config = json.load(f)
+        assert config["model_name"] == "mlp_regressor"
+        assert config["model_params"]["layer_dims"] == self.LAYER_DIMS
 
-            model2 = MLPRegressor.load(f"{tmp}/model_final")
-            preds2 = model2.predict(X)
-            np.testing.assert_array_equal(preds, preds2)
+        X = onehot_X(onehot_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
 
-    def test_get_params(self):
-        model = MLPRegressor(layer_dims=[176, 16, 1], hidden_activation="ReLU")
-        params = model.get_params()
-        assert params["layer_dims"] == [176, 16, 1]
-        assert params["hidden_activation"] == "ReLU"
-        assert params["accelerator"] == "auto"
+        model2 = MLPRegressor.load(str(tmp_path / "model_final"))
+        preds2 = model2.predict(X)
+        np.testing.assert_array_equal(preds, preds2)
+
+    def test_config(self):
+        model = MLPRegressor(layer_dims=self.LAYER_DIMS, hidden_activation="ReLU")
+        assert model.config["layer_dims"] == self.LAYER_DIMS
+        assert model.config["hidden_activation"] == "ReLU"
+        assert model.config["accelerator"] == "auto"
 
 
 class TestCNNRegressor:
@@ -85,44 +95,48 @@ class TestCNNRegressor:
     KERNEL_SPEC = [[3, 8, 1]]
     EMBED_DIMS = [VOCAB_SIZE, 8]
 
-    def test_lifecycle(self, tokenized_data):
-        with tempfile.TemporaryDirectory() as tmp:
-            model = CNNRegressor(
-                embed_dims=self.EMBED_DIMS,
-                kernel_spec=self.KERNEL_SPEC,
-                seq_length=SEQ_LEN,
-                output_dim=1,
-            )
-            model.train(train_data=tokenized_data, val_data=tokenized_data, tracking=False, model_path=f"{tmp}/model", max_epochs=5)
-
-            assert os.path.isdir(f"{tmp}/model_final")
-            assert os.path.exists(f"{tmp}/model_final/config.json")
-            assert os.path.exists(f"{tmp}/model_final/model.pt")
-
-            with open(f"{tmp}/model_final/config.json") as f:
-                config = json.load(f)
-            assert config["model_name"] == "cnn_regressor"
-            assert config["model_params"]["embed_dims"] == self.EMBED_DIMS
-            assert config["model_params"]["kernel_spec"] == self.KERNEL_SPEC
-
-            X = token_X(tokenized_data)
-            preds = model.predict(X)
-            assert preds.shape == (N,)
-
-            model2 = CNNRegressor.load(f"{tmp}/model_final")
-            preds2 = model2.predict(X)
-            np.testing.assert_array_equal(preds, preds2)
-
-    def test_get_params(self):
+    def test_lifecycle(self, tokenized_data, tmp_path):
         model = CNNRegressor(
             embed_dims=self.EMBED_DIMS,
             kernel_spec=self.KERNEL_SPEC,
             seq_length=SEQ_LEN,
             output_dim=1,
         )
-        params = model.get_params()
-        assert params["embed_dims"] == self.EMBED_DIMS
-        assert params["kernel_spec"] == self.KERNEL_SPEC
-        assert params["seq_length"] == SEQ_LEN
-        assert params["output_dim"] == 1
-        assert params["accelerator"] == "auto"
+        model.train(
+            train_data=tokenized_data,
+            val_data=tokenized_data,
+            tracking=False,
+            model_path=str(tmp_path / "model"),
+            max_epochs=5,
+        )
+
+        assert os.path.isdir(tmp_path / "model_final")
+        assert os.path.exists(tmp_path / "model_final" / "config.json")
+        assert os.path.exists(tmp_path / "model_final" / "model.pt")
+
+        with open(tmp_path / "model_final" / "config.json") as f:
+            config = json.load(f)
+        assert config["model_name"] == "cnn_regressor"
+        assert config["model_params"]["embed_dims"] == self.EMBED_DIMS
+        assert config["model_params"]["kernel_spec"] == self.KERNEL_SPEC
+
+        X = token_X(tokenized_data)
+        preds = model.predict(X)
+        assert preds.shape == (N,)
+
+        model2 = CNNRegressor.load(str(tmp_path / "model_final"))
+        preds2 = model2.predict(X)
+        np.testing.assert_array_equal(preds, preds2)
+
+    def test_config(self):
+        model = CNNRegressor(
+            embed_dims=self.EMBED_DIMS,
+            kernel_spec=self.KERNEL_SPEC,
+            seq_length=SEQ_LEN,
+            output_dim=1,
+        )
+        assert model.config["embed_dims"] == self.EMBED_DIMS
+        assert model.config["kernel_spec"] == self.KERNEL_SPEC
+        assert model.config["seq_length"] == SEQ_LEN
+        assert model.config["output_dim"] == 1
+        assert model.config["accelerator"] == "auto"

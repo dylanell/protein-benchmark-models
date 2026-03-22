@@ -2,32 +2,90 @@
 
 Benchmark suite comparing protein ML models on regression tasks from [TAPE](https://github.com/songlab-gpu/tape) and [FLIP2](https://zenodo.org/records/18433203). Simple baselines (ridge regression, MLP, CNN) are benchmarked first; pretrained protein LLM embeddings will follow.
 
-## TODO
+## Table of Contents
 
-- [x] Add 1D CNN baseline model over tokenized sequences
-- [x] Onboard FLIP2 tasks and run baselines
-- [ ] Add pretrained protein LLM embedding models (ESM, etc.)
-- [ ] Train baselines to convergence on all FLIP2 splits
-- [ ] Wire up Docker training image and Argo pipeline for GPU training runs
+- [Setup](#setup)
+- [Architecture](#architecture)
+- [Key Patterns](#key-patterns)
+- [Datasets](#datasets)
+- [Services (MinIO + MLflow)](#services-minio--mlflow)
+- [Docker](#docker)
+- [Remote GPU Training](#remote-gpu-training)
+- [Testing](#testing)
+- [TODO](#todo)
 
 ## Setup
+
+### Claude
+
+Create a `.claude/` directory to hold the following files:
+
+`lessons.md`: This is updated when you correct Claude about a mistake to note gotchas Claude should look out for. 
+
+`session_notes_<N>.md`: This is populated at the end of each session to summarize the additional work done in each session. 
+
+`settings.json`: Claude settings file that is read by default when claude starts up. Put the following in this file to ensure Claude reviews lessions and the session notes at start up automatically.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '## .claude/lessons.md' && cat .claude/lessons.md 2>/dev/null || echo 'none'; echo '## Latest Session Notes' && ls -t .claude/session_notes_*.md 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo 'none'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Python Project & Dependencies
 
 ```bash
 # Install uv if you haven't
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment and install dependencies
+# Initialize as Python package (first time project setup)
+# from directory containing this project directory (e.g. cd ../)
+uv init --package llm-knowledge-discovery
+
+# Create virtual environment manually (above does this as well)
 uv venv
 source .venv/bin/activate
-uv pip install -e "." --group dev
+
+# Sync dependencies and create the lock file
+uv sync
 ```
 
-Configure VSCode notebooks (add to `.vscode/settings.json`):
+### VSCode
+
+`.vscode/` is gitignored. Create `.vscode/settings.json` with the following:
+
 ```json
 {
-  "jupyter.notebookFileRoot": "${workspaceFolder}"
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "notebook.lineNumbers": "on",
+
+  // PEP8: show vertical ruler at column 80
+  "editor.rulers": [80],
+
+  // Wrap at 80 characters
+  "editor.wordWrapColumn": 80,
+
+  // Auto-format on save using ruff (PEP8-compliant, fast)
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  }
 }
 ```
+
+Also install the [Ruff VSCode extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff).
 
 ## Architecture
 
@@ -51,7 +109,7 @@ src/protein_benchmark_models/
 │   └── app.py                     # FastAPI app factory
 └── utils/
     ├── io.py                      # S3-compatible I/O utilities
-    ├── metrics.py                 # evaluate() — RMSE, R2, SpearmanR
+    ├── evaluation.py              # evaluate_regression() — RMSE, R2, SpearmanR
     └── seed.py                    # seed_everything() for reproducibility
 
 configs/
@@ -121,24 +179,24 @@ model.train(train_data=train_dataset, val_data=val_dataset, model_path=".models/
 ### Evaluation
 ```python
 import numpy as np
-from protein_benchmark_models.utils import evaluate
+from protein_benchmark_models.utils import evaluate_regression
 
 X = np.stack([dataset[i]["one_hots"].numpy().flatten() for i in range(len(dataset))])
 y = dataset.targets.numpy()
 
-metrics = evaluate(model, X, y)
+metrics = evaluate_regression(model, X, y)
 # {"rmse": float, "r2": float, "spearmanr": float}
 ```
 
 ### Reproducibility
 
-Pass `seed=42` to the model constructor. It seeds before weight init and again at the start of `_fit()` for shuffle/dropout reproducibility. The seed is logged to MLflow automatically via `get_params()`.
+Call `seed_everything()` before model construction. This seeds `random`, `numpy`, and `torch` for reproducible weight initialisation and training.
 
 ```python
 from protein_benchmark_models.utils import seed_everything
-seed_everything(42)  # Seeds random, numpy, and torch — call before model construction in notebooks
 
-model = MLPRegressor(layer_dims=[..., 1], seed=42)
+seed_everything(42)
+model = MLPRegressor(layer_dims=[..., 1])
 ```
 
 ### Model Authoring Guide
@@ -146,16 +204,17 @@ model = MLPRegressor(layer_dims=[..., 1], seed=42)
 #### Steps to add a new model
 
 1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`). For PyTorch models, initialize `lightning.Fabric` in `__init__` and use it for device/optimizer setup in `_fit()`
-2. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
-3. Register in `registry.py`
-4. Add lifecycle and get_params tests in `tests/test_models.py`
-
-You do **not** need to implement `get_params()` in most cases — see below.
+2. Set a `model_name: ClassVar[str]` class attribute matching the registry key
+3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
+4. Register in `registry.py`
+5. Add lifecycle and config tests in `tests/test_models.py`
 
 #### BaseModel Interface
 
 ```python
 class BaseModel(ABC):
+    model_name: ClassVar[str]  # must be set on each subclass
+
     # Public API — MLflow orchestration (set experiment, start run, log params, save artifact)
     def train(self, *, experiment_name, train_data, tracking=True, **kwargs) -> None
 
@@ -175,19 +234,13 @@ class BaseModel(ABC):
     # Log to MLflow (no-op when tracking=False) — use in _fit() instead of mlflow directly
     def log_param(self, key, value) -> None
     def log_metric(self, key, value, step=None) -> None
-
-    # Auto-populated from __init__ args via __init_subclass__ — no override needed
-    # Override only if automatic capture is insufficient (e.g. sklearn **kwargs)
-    def get_params(self) -> dict
 ```
 
 #### Automatic `__init__` param capture
 
-`BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments into `self._model_params`. This means `get_params()` works out of the box — you don't need to build param dicts manually or override it.
+`BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments into `self.config` (a plain dict). These are logged to MLflow automatically when `train()` is called — you don't need to build param dicts manually.
 
 Training-time arguments (`lr`, `batch_size`, `max_epochs`, etc.) are passed to `_fit()`, not `__init__()`, so they are **not** auto-captured. Log them manually inside `_fit()` using `self.log_param()`.
-
-Override `get_params()` only when auto-capture is insufficient — e.g. when `__init__` uses `**kwargs` to forward arguments to an underlying library that has its own defaults (see `ridge_regressor.py` for an example).
 
 ## Datasets
 
@@ -369,4 +422,12 @@ Tests use `tracking=False` to skip MLflow — no external services needed. They 
 
 When adding a new model, add matching tests in `tests/test_models.py` following the existing pattern:
 - **`test_lifecycle`** — create, train (`tracking=False`), predict (check output shape), save, load, predict again (outputs match)
-- **`test_get_params`** — verify `get_params()` returns the expected keys and values
+- **`test_config`** — verify `model.config` contains the expected keys and values
+
+## TODO
+
+- [x] Add 1D CNN baseline model over tokenized sequences
+- [x] Onboard FLIP2 tasks and run baselines
+- [ ] Add pretrained protein LLM embedding models (ESM, etc.)
+- [ ] Train baselines to convergence on all FLIP2 splits
+- [ ] Wire up Docker training image and Argo pipeline for GPU training runs

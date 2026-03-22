@@ -79,7 +79,7 @@ src/protein_benchmark_models/
 │   └── app.py               # FastAPI app factory (legacy, Iris-era)
 └── utils/
     ├── io.py                # S3-compatible I/O utilities
-    ├── metrics.py           # evaluate() — RMSE, R2, SpearmanR
+    ├── evaluation.py        # evaluate_regression() — RMSE, R2, SpearmanR
     └── seed.py              # seed_everything() for reproducibility
 
 configs/
@@ -145,15 +145,18 @@ model.train(
 ```
 
 ### Adding New Models
-1. Create `src/ml_project_template/models/my_model.py` extending `BaseModel` (from `base.py`)
-2. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()` (and `get_params()` only if automatic capture doesn't work — see below)
-3. Register in `registry.py`
+1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`)
+2. Set `model_name: ClassVar[str]` matching the registry key
+3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
+4. Register in `registry.py`
 
-For PyTorch models, initialize `lightning.Fabric` in `__init__` directly (see `mlp_classifier.py`).
+For PyTorch models, initialize `lightning.Fabric` in `__init__` directly (see `mlp_regressor.py`).
 
 ### BaseModel Interface
 ```python
 class BaseModel(ABC):
+    model_name: ClassVar[str]  # must be set on each subclass
+
     # Public API — MLflow orchestration (set experiment, start run, log params, save artifact)
     def train(self, *, experiment_name, train_data, **kwargs) -> None
 
@@ -170,18 +173,16 @@ class BaseModel(ABC):
     def _load_weights(self, dir_path: str) -> None
     def predict(self, X: np.ndarray) -> np.ndarray
 
-    # Auto-populated from __init__ args via __init_subclass__ — no override needed
-    # Override only if automatic capture is insufficient (e.g. sklearn **kwargs)
-    def get_params(self) -> dict
+    # Log to MLflow (no-op when tracking=False) — use in _fit() instead of mlflow directly
+    def log_param(self, key, value) -> None
+    def log_metric(self, key, value, step=None) -> None
 ```
 
 ### Automatic `__init__` Param Capture
 `BaseModel` uses `__init_subclass__` to automatically record all `__init__` arguments
-into `self._model_params`. Logged to MLflow automatically in `train()`. Override
-`get_params()` only when needed (e.g. sklearn models where `**kwargs` doesn't capture
-individual params with defaults).
+into `self.config` (a plain dict). Logged to MLflow automatically in `train()`.
 
-See README.md "Automatic `__init__` param capture" for a full walkthrough with examples.
+See README.md "Automatic `__init__` param capture" for details.
 
 ## Conventions
 
@@ -189,10 +190,9 @@ See README.md "Automatic `__init__` param capture" for a full walkthrough with e
 - **Data in `.data/`** - Raw datasets, gitignored
 - **Models in `.models/`** - Saved artifacts, gitignored
 - **PyTorch models**: Separate `nn.Module` class from `BaseModel` wrapper in same file; initialize `lightning.Fabric` directly in `__init__`
-- **Sklearn models**: Override `get_params()` to delegate to sklearn's introspection
 - **NumPy I/O**: All models return raw numpy output from `predict()` — caller handles post-processing (argmax, etc.)
 - **Training params**: Logged manually inside `_fit()`, not auto-captured (only `__init__` args are auto-captured)
-- **Reproducibility**: Configs have a top-level `"seed"` key. Scripts call `seed_everything(seed)` early, and pass `seed=seed` to `model.train()`. The seed is logged to MLflow automatically.
+- **Reproducibility**: Configs have a top-level `"seed"` key. Scripts call `seed_everything(seed)` before model construction. Seeding is the caller's responsibility — models do not accept a `seed` argument.
 - **`embed_dims[0]` in CNN configs**: Must equal `len(AA_VOCAB)` = 22 (the fixed protein amino acid vocabulary size including PAD and UNK). This is intentionally explicit in configs — it's a constant property of the protein alphabet, not a data-derived value like `seq_len`, so it is not auto-injected by `train.py`.
 - **`_fit()` arg ordering**: `model_path` is always first after `*` in both MLP and CNN `_fit()` signatures, followed by training hyperparams (`lr`, `weight_decay`, etc.).
 

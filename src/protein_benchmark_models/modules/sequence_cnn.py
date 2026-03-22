@@ -20,7 +20,7 @@ from typing import Literal
 
 import torch.nn as nn
 
-from protein_benchmark_models.modules.utils import Transpose
+from .utils import Transpose
 
 
 class SequenceCNN(nn.Module):

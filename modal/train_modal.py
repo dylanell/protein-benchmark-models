@@ -57,11 +57,14 @@ app = modal.App(APP_NAME)
 )
 def run_training(config: dict) -> None:
     import train
+
     train.run(config)
 
 
 @app.local_entrypoint()
-def main(config: str = "configs/remote/tape_fluorescence_mlp_regressor.json") -> None:
+def main(
+    config: str = "configs/remote/tape_fluorescence_mlp_regressor.json",
+) -> None:
     with open(config) as f:
         cfg = json.load(f)
     print(f"[modal] Submitting training run with config: {config}")

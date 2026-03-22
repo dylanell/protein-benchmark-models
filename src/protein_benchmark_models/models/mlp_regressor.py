@@ -15,14 +15,16 @@ from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.loggers import Logger
 from lightning.fabric.strategies import Strategy
 
-from protein_benchmark_models.data import OneHotSequenceDataset
-from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.modules.fully_connected import FullyConnected
-from protein_benchmark_models.utils import evaluate, seed_everything
+from ..data import OneHotSequenceDataset
+from .base import BaseModel
+from ..modules.fully_connected import FullyConnected
+from ..utils import evaluate_regression, seed_everything
 
 
 class MLPRegressor(BaseModel):
     """MLP regressor backed by a FullyConnected module."""
+
+    model_name = "mlp_regressor"
 
     def __init__(
         self,
@@ -31,30 +33,15 @@ class MLPRegressor(BaseModel):
         output_activation: str = "Identity",
         use_bias: bool = True,
         norm: Literal["batch", "layer"] | None = None,
-        seed: int | None = None,
         accelerator: str | Accelerator = "auto",
         strategy: str | Strategy = "auto",
         devices: list[int] | str | int = "auto",
         precision: str | int = "32-true",
         plugins: str | Any | None = None,
         callbacks: list[Any] | Any | None = None,
-        loggers: Logger | list[Logger] | None = None
+        loggers: Logger | list[Logger] | None = None,
     ):
         super().__init__()
-        self.seed = seed
-        if seed is not None:
-            seed_everything(seed)
-
-        # Initialize fabric
-        self.fabric = L.Fabric(
-            accelerator=accelerator,
-            strategy=strategy,
-            devices=devices,
-            precision=precision,
-            plugins=plugins,
-            callbacks=callbacks,
-            loggers=loggers
-        )
 
         self.model = FullyConnected(
             layer_dims=layer_dims,
@@ -65,6 +52,17 @@ class MLPRegressor(BaseModel):
         )
 
         self.loss_fcn = nn.MSELoss()
+
+        # Initialize fabric
+        self.fabric = L.Fabric(
+            accelerator=accelerator,
+            strategy=strategy,
+            devices=devices,
+            precision=precision,
+            plugins=plugins,
+            callbacks=callbacks,
+            loggers=loggers,
+        )
 
     def _fit(
         self,
@@ -77,10 +75,8 @@ class MLPRegressor(BaseModel):
         batch_size: int = 32,
         max_epochs: int = 100,
         val_frequency: int = 1,
-        patience: int = -1
+        patience: int = -1,
     ) -> None:
-        if self.seed is not None:
-            seed_everything(self.seed)
 
         # Log training parameters before training starts
         self.log_param("lr", lr)
@@ -91,13 +87,19 @@ class MLPRegressor(BaseModel):
         self.log_param("patience", patience)
 
         # Initialize optimizer and fabric
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=lr, weight_decay=weight_decay
+        )
         model, optimizer = self.fabric.setup(self.model, optimizer)
 
         # Initialize dataloaders
-        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        train_dataloader = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True
+        )
         train_dataloader = self.fabric.setup_dataloaders(train_dataloader)
-        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+        val_dataloader = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False
+        )
         val_dataloader = self.fabric.setup_dataloaders(val_dataloader)
 
         epochs_without_improvement = 0
@@ -145,17 +147,26 @@ class MLPRegressor(BaseModel):
                     epochs_without_improvement += 1
 
                 if epochs_without_improvement == patience:
-                    print(f"{patience} epochs reached without improvement. Early stopping.")
+                    print(
+                        f"{patience} epochs reached without improvement. Early stopping."
+                    )
                     break
 
-            status = f"Epoch: {epoch+1}/{max_epochs} | train_loss: {train_loss:.4f} | "\
+            status = (
+                f"Epoch: {epoch + 1}/{max_epochs} | train_loss: {train_loss:.4f} | "
                 f"val_loss: {val_loss:.4f} | best_val_loss: {best_val_loss:.4f}"
+            )
             pbar.set_description(status)
 
         # Final validation metrics
-        X = np.stack([val_data[i]["one_hots"].numpy().flatten() for i in range(len(val_data))])
+        X = np.stack(
+            [
+                val_data[i]["one_hots"].numpy().flatten()
+                for i in range(len(val_data))
+            ]
+        )
         y = val_data.targets.numpy()
-        metrics = evaluate(self, X, y)
+        metrics = evaluate_regression(self, X, y)
         for k, v in metrics.items():
             self.log_metric(f"val_{k}", v)
         print(f"[mlp_regressor] Valid RMSE: {metrics['rmse']:.04f}")
@@ -172,7 +183,9 @@ class MLPRegressor(BaseModel):
 
     def _save_weights(self, dir_path: str) -> None:
         """Save model state dict to directory."""
-        self.fabric.save(os.path.join(dir_path, "model.pt"), {"model": self.model})
+        self.fabric.save(
+            os.path.join(dir_path, "model.pt"), {"model": self.model}
+        )
 
     def _load_weights(self, dir_path: str) -> None:
         """Load model state dict from directory."""

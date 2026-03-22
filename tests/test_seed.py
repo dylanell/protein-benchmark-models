@@ -29,24 +29,25 @@ class TestSeedEverything:
 
         torch.testing.assert_close(a, b)
 
-    def test_mlp_training_determinism(self, onehot_data):
+    # tmp_path is a built-in pytest fixture that provides a temporary directory
+    # unique to each test invocation, automatically cleaned up afterwards.
+    def test_mlp_training_determinism(self, onehot_data, tmp_path):
         """Two MLP training runs with the same seed produce identical predictions."""
         X = onehot_X(onehot_data)
 
-        def train_and_predict(seed):
-            import tempfile
-            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1], seed=seed)
-            with tempfile.TemporaryDirectory() as tmp:
-                model.train(
-                    train_data=onehot_data,
-                    val_data=onehot_data,
-                    tracking=False,
-                    model_path=f"{tmp}/model",
-                    max_epochs=5,
-                )
+        def train_and_predict(seed, path):
+            seed_everything(seed)
+            model = MLPRegressor(layer_dims=[SEQ_LEN * VOCAB_SIZE, 16, 1])
+            model.train(
+                train_data=onehot_data,
+                val_data=onehot_data,
+                tracking=False,
+                model_path=str(path / "model"),
+                max_epochs=5,
+            )
             return model.predict(X)
 
-        preds1 = train_and_predict(99)
-        preds2 = train_and_predict(99)
+        preds1 = train_and_predict(99, tmp_path / "run1")
+        preds2 = train_and_predict(99, tmp_path / "run2")
 
         np.testing.assert_array_equal(preds1, preds2)

@@ -1,4 +1,4 @@
-"""Evaluation utilities for regression models."""
+"""Evaluation utilities for benchmark tasks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from sklearn.metrics import r2_score
 from scipy.stats import spearmanr
 
 
-def evaluate(model, X: np.ndarray, y: np.ndarray) -> dict:
+def evaluate_regression(model, X: np.ndarray, y: np.ndarray) -> dict:
     """Compute regression metrics for a model on a pre-built input array.
 
     Args:

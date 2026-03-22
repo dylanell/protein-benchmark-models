@@ -28,6 +28,6 @@
         "batch_size": 256,
         "val_frequency": 1,
         "patience": 25,
-        "tracking": false
+        "tracking": true
     }
 }

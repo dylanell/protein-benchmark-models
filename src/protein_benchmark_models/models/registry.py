@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import os
 
-from protein_benchmark_models.models.base import BaseModel
-from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
-from protein_benchmark_models.models.mlp_regressor import MLPRegressor
-from protein_benchmark_models.models.cnn_regressor import CNNRegressor
+from .base import BaseModel
+from .ridge_regressor import RidgeRegressor
+from .mlp_regressor import MLPRegressor
+from .cnn_regressor import CNNRegressor
 
 
 class ModelRegistry:
@@ -17,7 +17,7 @@ class ModelRegistry:
     _models: dict[str, type[BaseModel]] = {
         "ridge_regressor": RidgeRegressor,
         "mlp_regressor": MLPRegressor,
-        "cnn_regressor": CNNRegressor
+        "cnn_regressor": CNNRegressor,
     }
 
     @classmethod
@@ -31,14 +31,6 @@ class ModelRegistry:
         if name not in cls._models:
             raise ValueError(f"Unknown model: {name}. Available: {cls.list()}")
         return cls._models[name]
-
-    @classmethod
-    def get_name(cls, model_class: type[BaseModel]) -> str:
-        """Reverse lookup: Get name by model class."""
-        for name, klass in cls._models.items():
-            if klass is model_class:
-                return name
-        raise ValueError(f"Model class {model_class} is not registered.")
 
     @classmethod
     def load(cls, path: str) -> BaseModel:

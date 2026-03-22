@@ -18,7 +18,9 @@ class BaseDataset(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def to_pytorch(self, batch_size: int = 32, shuffle: bool = True) -> DataLoader:
+    def to_pytorch(
+        self, batch_size: int = 32, shuffle: bool = True
+    ) -> DataLoader:
         """Convert to PyTorch DataLoader."""
         raise NotImplementedError
 
