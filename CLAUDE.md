@@ -146,9 +146,8 @@ model.train(
 
 ### Adding New Models
 1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`)
-2. Set `model_name: ClassVar[str]` matching the registry key
+2. Set `model_name: ClassVar[str]` and decorate the class with `@register` (from `.registry`) — auto-discovery handles registration
 3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
-4. Register in `registry.py`
 
 For PyTorch models, initialize `lightning.Fabric` in `__init__` directly (see `mlp_regressor.py`).
 

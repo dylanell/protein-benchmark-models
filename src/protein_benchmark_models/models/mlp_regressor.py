@@ -17,10 +17,12 @@ from lightning.fabric.strategies import Strategy
 
 from ..data import OneHotSequenceDataset
 from .base import BaseModel
+from .registry import register
 from ..modules.fully_connected import FullyConnected
 from ..utils import evaluate_regression, seed_everything
 
 
+@register
 class MLPRegressor(BaseModel):
     """MLP regressor backed by a FullyConnected module."""
 

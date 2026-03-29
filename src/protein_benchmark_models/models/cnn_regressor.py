@@ -17,10 +17,12 @@ from lightning.fabric.strategies import Strategy
 
 from ..data import TokenizedSequenceDataset
 from .base import BaseModel
+from .registry import register
 from ..modules.sequence_cnn import SequenceCNN
 from ..utils import evaluate_regression
 
 
+@register
 class CNNRegressor(BaseModel):
     """Sequence regressor model using 1D CNNs."""
 

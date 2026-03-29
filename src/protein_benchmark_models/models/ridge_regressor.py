@@ -9,9 +9,11 @@ from sklearn.linear_model import Ridge
 
 from ..data import OneHotSequenceDataset
 from .base import BaseModel
+from .registry import register
 from ..utils import evaluate_regression
 
 
+@register
 class RidgeRegressor(BaseModel):
     """Scikit-learn Ridge regression wrapper."""
 
