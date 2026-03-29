@@ -6,19 +6,12 @@ import json
 import os
 
 from .base import BaseModel
-from .ridge_regressor import RidgeRegressor
-from .mlp_regressor import MLPRegressor
-from .cnn_regressor import CNNRegressor
 
 
 class ModelRegistry:
     """Registry for model classes."""
 
-    _models: dict[str, type[BaseModel]] = {
-        "ridge_regressor": RidgeRegressor,
-        "mlp_regressor": MLPRegressor,
-        "cnn_regressor": CNNRegressor,
-    }
+    _models: dict[str, type[BaseModel]] = {}
 
     @classmethod
     def list(cls) -> list[str]:
@@ -40,7 +33,16 @@ class ModelRegistry:
         model_class = cls.get(config["model_name"])
         return model_class.load(path)
 
-    @classmethod
-    def register(cls, name: str, model_class: type[BaseModel]) -> None:
-        """Register a new model class."""
-        cls._models[name] = model_class
+
+def register(cls: type[BaseModel]) -> type[BaseModel]:
+    """Class decorator that registers a model in ModelRegistry.
+
+    Usage::
+
+        @register
+        class MyModel(BaseModel):
+            model_name = "my_model"
+            ...
+    """
+    ModelRegistry._models[cls.model_name] = cls
+    return cls

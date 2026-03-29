@@ -8,6 +8,7 @@ Benchmark suite comparing protein ML models on regression tasks from [TAPE](http
 - [Architecture](#architecture)
 - [Key Patterns](#key-patterns)
 - [Datasets](#datasets)
+- [Local Training](#local-training)
 - [Services (MinIO + MLflow)](#services-minio--mlflow)
 - [Docker](#docker)
 - [Remote GPU Training](#remote-gpu-training)
@@ -50,16 +51,9 @@ Create a `.claude/` directory to hold the following files:
 # Install uv if you haven't
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Initialize as Python package (first time project setup)
-# from directory containing this project directory (e.g. cd ../)
-uv init --package llm-knowledge-discovery
-
-# Create virtual environment manually (above does this as well)
-uv venv
+# Create virtual environment and install dependencies
+uv venv && uv pip install -e "." --group dev
 source .venv/bin/activate
-
-# Sync dependencies and create the lock file
-uv sync
 ```
 
 ### VSCode
@@ -92,9 +86,9 @@ Also install the [Ruff VSCode extension](https://marketplace.visualstudio.com/it
 ```
 src/protein_benchmark_models/
 ├── data/                          # Dataset abstractions
-│   ├── base.py                    # BaseDataset ABC
+│   ├── base.py                    # BaseDataset ABC (legacy)
 │   ├── sequence.py                # SequenceDataset, TokenizedSequenceDataset, OneHotSequenceDataset
-│   └── tabular.py                 # TabularDataset for numerical data
+│   └── tabular.py                 # TabularDataset for numerical data (legacy)
 ├── models/                        # Model implementations
 │   ├── base.py                    # BaseModel ABC (MLflow, save/load)
 │   ├── registry.py                # ModelRegistry for model discovery
@@ -106,7 +100,7 @@ src/protein_benchmark_models/
 │   ├── sequence_cnn.py            # SequenceCNN (stacked 1D convolutions)
 │   └── utils.py                   # Shared utilities (Transpose)
 ├── serving/
-│   └── app.py                     # FastAPI app factory
+│   └── app.py                     # FastAPI app factory (legacy, Iris-era)
 └── utils/
     ├── io.py                      # S3-compatible I/O utilities
     ├── evaluation.py              # evaluate_regression() — RMSE, R2, SpearmanR
@@ -204,10 +198,9 @@ model = MLPRegressor(layer_dims=[..., 1])
 #### Steps to add a new model
 
 1. Create `src/protein_benchmark_models/models/my_model.py` extending `BaseModel` (from `base.py`). For PyTorch models, initialize `lightning.Fabric` in `__init__` and use it for device/optimizer setup in `_fit()`
-2. Set a `model_name: ClassVar[str]` class attribute matching the registry key
+2. Set a `model_name: ClassVar[str]` class attribute and decorate the class with `@register` (imported from `.registry`) — auto-discovery handles the rest
 3. Implement `_fit()`, `_save_weights()`, `_load_weights()`, and `predict()`
-4. Register in `registry.py`
-5. Add lifecycle and config tests in `tests/test_models.py`
+4. Add lifecycle and config tests in `tests/test_models.py`
 
 #### BaseModel Interface
 
@@ -302,6 +295,24 @@ All FLIP2 tasks are sourced from [Zenodo record 18433203](https://zenodo.org/rec
 | `hydro` | `three_to_many`, `low_to_high`, `to_P06241`, `to_P0A9X9`, `to_P01053`, `random_split` |
 | `rhomax` | `by_wild_type` |
 
+## Local Training
+
+Local configs (under `configs/local/`) use `.data/` paths and set `tracking=false`, so **no external services are needed** — just onboard the data and run:
+
+```bash
+# TAPE fluorescence
+uv run python scripts/train.py --config configs/local/tape_fluorescence_ridge_regressor.json
+uv run python scripts/train.py --config configs/local/tape_fluorescence_mlp_regressor.json
+uv run python scripts/train.py --config configs/local/tape_fluorescence_cnn_regressor.json
+
+# FLIP2 amylase (random split)
+uv run python scripts/train.py --config configs/local/flip2_amylase_random_split_ridge_regressor.json
+uv run python scripts/train.py --config configs/local/flip2_amylase_random_split_mlp_regressor.json
+uv run python scripts/train.py --config configs/local/flip2_amylase_random_split_cnn_regressor.json
+```
+
+If you want MLflow tracking locally, start the services first (see [Services](#services-minio--mlflow)) and switch to a `configs/remote/` config (which sets `tracking=true` and uses `s3://` data paths via MinIO).
+
 ## Services (MinIO + MLflow)
 
 MLflow (experiment tracking) and MinIO (S3-compatible artifact storage) are run via the same `docker-compose.yaml` in both local and remote setups. The only difference is the `.env` file. See `.env.example` for both configurations.
@@ -321,16 +332,18 @@ Stop with `docker compose down`. Data persists in Docker volumes.
 
 A persistent GCE VM (`e2-medium`, `us-central1-a`) runs the same `docker-compose.yaml` with a reserved static IP. This allows training jobs running anywhere (local, Modal, GKE) to log to a shared MLflow server.
 
+Services are configured to **start automatically on boot** via a systemd unit (see setup instructions below), so the full workflow is just:
+
 ```bash
-# Start VM
+# Start VM (services start automatically)
 gcloud compute instances start mlflow-server --zone us-central1-a
 
 # Stop VM when not in use (no compute charge while stopped)
 gcloud compute instances stop mlflow-server --zone us-central1-a
-
-# SSH in
-gcloud compute ssh mlflow-server --zone us-central1-a
 ```
+
+- **MLflow UI:** [http://34.42.116.216:5000](http://34.42.116.216:5000)
+- **MinIO console:** [http://34.42.116.216:7001](http://34.42.116.216:7001) (login: `minioadmin`/`minioadmin`)
 
 To deploy from scratch on a new VM:
 
@@ -356,14 +369,41 @@ gcloud compute instances add-access-config mlflow-server --access-config-name "e
   --address $(gcloud compute addresses describe mlflow-server-ip --region us-central1 --format='get(address)') \
   --zone us-central1-a
 
-# 4. Install Docker, copy docker-compose.yaml, create .env, start services
+# 4. Copy docker-compose.yaml to the VM (run from local)
+gcloud compute scp docker-compose.yaml mlflow-server:~/docker-compose.yaml --zone us-central1-a
+
+# 5. SSH in and install Docker
 gcloud compute ssh mlflow-server --zone us-central1-a
 # On the VM:
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker
-# Copy docker-compose.yaml to the VM (from local):
-# gcloud compute scp docker-compose.yaml mlflow-server:~/docker-compose.yaml --zone us-central1-a
-docker compose up -d
+
+# 6. Configure services to auto-start on boot
+sudo tee /etc/systemd/system/mlflow-minio.service > /dev/null <<EOF
+[Unit]
+Description=MLflow + MinIO
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/$(whoami)
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable mlflow-minio.service
+sudo systemctl start mlflow-minio.service
+
+# Verify services are running
+sudo systemctl status mlflow-minio.service
 ```
 
 Update `.env` locally to point at the VM's static IP (see `.env.example` Option B).
@@ -392,15 +432,33 @@ docker run --env-file .env train-job --config configs/remote/<your_config>.json
 
 Run any training config on a GPU without managing infrastructure. Data is read from MinIO and results logged to MLflow — identical flow to local training.
 
+> **Prerequisites:** `configs/remote/` configs use `s3://` data paths and `tracking=true`, so the GCE VM must be running before you submit a job:
+> ```bash
+> gcloud compute instances start mlflow-server --zone us-central1-a
+> ```
+> Stop it when done to avoid unnecessary charges:
+> ```bash
+> gcloud compute instances stop mlflow-server --zone us-central1-a
+> ```
+
 ```bash
 uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
 ```
 
-See [modal/README.md](modal/README.md) for prerequisites and setup.
+See [modal/README.md](modal/README.md) for Modal-specific prerequisites and setup.
 
 ### Argo Workflows on GKE (production-style)
 
 Argo Workflow pipelines live in `argo/` and run training jobs as K8s pods on a GKE cluster with T4 spot GPU nodes. See [argo/README.md](argo/README.md) for full cluster setup and image push instructions.
+
+> **Prerequisites:** Same as Modal — `configs/remote/` configs require MinIO (data) and MLflow (tracking). Start the GCE VM before submitting:
+> ```bash
+> gcloud compute instances start mlflow-server --zone us-central1-a
+> ```
+> Stop it when done:
+> ```bash
+> gcloud compute instances stop mlflow-server --zone us-central1-a
+> ```
 
 ```bash
 # Submit a training run (configs are baked into the training image)
