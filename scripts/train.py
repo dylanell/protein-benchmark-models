@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from protein_benchmark_models.data import (
     OneHotSequenceDataset,
     TokenizedSequenceDataset,
+    PairedOneHotSequenceDataset,
 )
 from protein_benchmark_models.models import ModelRegistry
 from protein_benchmark_models.utils import get_storage_options, seed_everything
@@ -33,6 +34,7 @@ _SCRIPT = "train.py"
 DATASET_CLASSES = {
     "one_hot": OneHotSequenceDataset,
     "tokenized": TokenizedSequenceDataset,
+    "paired_one_hot": PairedOneHotSequenceDataset,
 }
 
 
@@ -67,11 +69,8 @@ def run(config: dict) -> None:
         f"[{_SCRIPT}] Train size: {len(train_df)}, Valid size: {len(val_df)}"
     )
 
-    # Compute seq_len from training sequences
-    seq_len = max(len(s) for s in train_df["sequence"])
-    logging.info(f"[{_SCRIPT}] Max sequence length: {seq_len}")
-
-    # Build datasets
+    # Compute seq_len from training sequences.
+    # For paired datasets, use the max length across both sequence columns.
     dataset_type = data_cfg["dataset_type"]
     if dataset_type not in DATASET_CLASSES:
         logging.error(
@@ -80,15 +79,47 @@ def run(config: dict) -> None:
         )
         sys.exit(1)
 
+    is_paired = dataset_type == "paired_one_hot"
+
+    if is_paired:
+        seq_len_cfg = data_cfg.get("seq_len")
+        if seq_len_cfg is not None:
+            seq_len = seq_len_cfg
+        else:
+            seq_len = max(
+                max(len(s) for s in train_df["sequence_a"]),
+                max(len(s) for s in train_df["sequence_b"]),
+            )
+    else:
+        seq_len = max(len(s) for s in train_df["sequence"])
+    logging.info(f"[{_SCRIPT}] Sequence length (seq_len): {seq_len}")
+
+    # Build datasets
     DatasetClass = DATASET_CLASSES[dataset_type]
-    train_dataset = DatasetClass(
-        train_df["sequence"].tolist(),
-        train_df["target"].tolist(),
-        seq_len=seq_len,
-    )
-    val_dataset = DatasetClass(
-        val_df["sequence"].tolist(), val_df["target"].tolist(), seq_len=seq_len
-    )
+    if is_paired:
+        train_dataset = DatasetClass(
+            train_df["sequence_a"].tolist(),
+            train_df["sequence_b"].tolist(),
+            train_df["target"].tolist(),
+            seq_len=seq_len,
+        )
+        val_dataset = DatasetClass(
+            val_df["sequence_a"].tolist(),
+            val_df["sequence_b"].tolist(),
+            val_df["target"].tolist(),
+            seq_len=seq_len,
+        )
+    else:
+        train_dataset = DatasetClass(
+            train_df["sequence"].tolist(),
+            train_df["target"].tolist(),
+            seq_len=seq_len,
+        )
+        val_dataset = DatasetClass(
+            val_df["sequence"].tolist(),
+            val_df["target"].tolist(),
+            seq_len=seq_len,
+        )
 
     # Build model params, injecting data-derived shape values that can't be
     # known until the dataset is loaded.
@@ -111,6 +142,17 @@ def run(config: dict) -> None:
         # CNN conv layers slide along the sequence dimension, so the
         # architecture depends explicitly on seq_length.
         model_params["seq_length"] = seq_len
+    elif dataset_type == "paired_one_hot":
+        # Siamese MLP: inject the per-sequence input dim as encoder_dims[0].
+        # The config stores only the hidden/output encoder dims; train.py
+        # prepends the computed input dim.
+        # head_dims must be fully specified in the config (including
+        # head_dims[0] == 2 * encoder_dims[-1]).
+        if "encoder_dims" in model_params:
+            input_dim = train_dataset[0]["one_hots_a"].flatten().shape[0]
+            model_params["encoder_dims"] = [input_dim] + model_params[
+                "encoder_dims"
+            ]
 
     # Seed immediately before model construction so weight init is reproducible
     if seed is not None:

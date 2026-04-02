@@ -245,3 +245,31 @@ class BaseModel(ABC):
     def _load_weights(self, dir_path: str) -> None:
         """Load model weights from directory. Subclasses implement this."""
         raise NotImplementedError
+
+
+class BasePairedModel(BaseModel):
+    """Abstract base class for models that take paired sequence inputs.
+
+    Extends BaseModel with a predict signature that accepts two input arrays
+    (one per sequence), suitable for protein-protein interaction tasks.
+
+    Subclasses must implement predict(X_a, X_b) instead of predict(X).
+    All other BaseModel machinery (train, save, load, MLflow) is unchanged.
+    """
+
+    @abstractmethod
+    def predict(  # type: ignore[override]
+        self, X_a: np.ndarray, X_b: np.ndarray
+    ) -> np.ndarray:
+        """Run inference on paired inputs.
+
+        Args:
+            X_a: Input array for the first sequence of each pair, shape
+                (N, ...).
+            X_b: Input array for the second sequence of each pair, shape
+                (N, ...).
+
+        Returns:
+            Predictions of shape (N,).
+        """
+        raise NotImplementedError

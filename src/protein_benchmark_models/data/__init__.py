@@ -5,6 +5,9 @@ from .sequence import (
     SequenceDataset,
     TokenizedSequenceDataset,
     OneHotSequenceDataset,
+    PairedSequenceDataset,
+    PairedTokenizedSequenceDataset,
+    PairedOneHotSequenceDataset,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "SequenceDataset",
     "TokenizedSequenceDataset",
     "OneHotSequenceDataset",
+    "PairedSequenceDataset",
+    "PairedTokenizedSequenceDataset",
+    "PairedOneHotSequenceDataset",
 ]

@@ -10,7 +10,7 @@ import importlib
 import pkgutil
 from pathlib import Path
 
-from .base import BaseModel
+from .base import BaseModel, BasePairedModel
 from .registry import ModelRegistry, register
 
 _package_dir = Path(__file__).parent
@@ -18,4 +18,4 @@ for _, _module_name, _ in pkgutil.iter_modules([str(_package_dir)]):
     if _module_name not in ("base", "registry"):
         importlib.import_module(f".{_module_name}", package=__name__)
 
-__all__ = ["BaseModel", "ModelRegistry", "register"]
+__all__ = ["BaseModel", "BasePairedModel", "ModelRegistry", "register"]

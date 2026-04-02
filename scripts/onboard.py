@@ -16,6 +16,17 @@ Output structure for FLIP2:
     .data/<task>/<split>/train.csv
     .data/<task>/<split>/valid.csv
     .data/<task>/<split>/test.csv
+
+Bernett PPI task (gold-standard leakage-free human PPI binary classification):
+    uv run python scripts/onboard.py --task bernett_ppi
+
+Output structure for bernett_ppi:
+    .data/bernett_ppi/train.csv  — columns: sequence_a, sequence_b, target
+    .data/bernett_ppi/valid.csv
+    .data/bernett_ppi/test.csv
+
+Source: Bernett et al. (2024), Briefings in Bioinformatics.
+        https://doi.org/10.6084/m9.figshare.21591618
 """
 
 import logging
@@ -39,6 +50,15 @@ logger = logging.getLogger(__name__)
 _SCRIPT = "onboard.py"
 TAPE_BASE = "http://s3.amazonaws.com/songlabdata/proteindata/data_raw_pytorch"
 ZENODO_BASE = "https://zenodo.org/records/18433203/files"
+FIGSHARE_API = "https://api.figshare.com/v2/articles"
+
+BERNETT_PPI_ARTICLE_ID = "21591618"
+# Intra-1 = train, Intra-0 = valid, Intra-2 = test (paper convention)
+BERNETT_PPI_SPLITS = {
+    "train": "Intra1",
+    "valid": "Intra0",
+    "test": "Intra2",
+}
 
 TAPE_TASKS = {
     "fluorescence": {
@@ -198,6 +218,106 @@ def onboard_flip2_task(task_name: str, dest: str) -> None:
             )
 
 
+def get_figshare_files(article_id: str) -> dict[str, str]:
+    """Return {filename: download_url} for all files in a figshare article."""
+    url = f"{FIGSHARE_API}/{article_id}/files"
+    with urllib.request.urlopen(url) as response:
+        files = json.loads(response.read().decode("utf-8"))
+    return {f["name"]: f["download_url"] for f in files}
+
+
+def parse_fasta_oneliner(data: bytes) -> dict[str, str]:
+    """Parse a one-liner FASTA file into a {uniprot_id: sequence} dict.
+
+    Expects headers in Swiss-Prot format: >sp|<ID>|<NAME> ...
+    Falls back to the first whitespace-delimited token for other formats.
+    """
+    seqs: dict[str, str] = {}
+    current_id: str | None = None
+    for line in data.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            header = line[1:]
+            parts = header.split("|")
+            current_id = parts[1] if len(parts) >= 3 else header.split()[0]
+        elif current_id is not None:
+            seqs[current_id] = line
+            current_id = None
+    return seqs
+
+
+def onboard_bernett_ppi(dest: str) -> None:
+    """Download the Bernett et al. PPI gold-standard dataset from figshare.
+
+    Fetches:
+      - human_swissprot_oneliner.fasta — protein sequences
+      - Intra{0,1,2}_{pos,neg}_rr.txt — UniProt ID pairs per split
+
+    Writes one CSV per split (train/valid/test) with columns:
+      sequence_a, sequence_b, target (1 = interacting, 0 = non-interacting)
+
+    Pairs for which either protein is absent from the FASTA are silently
+    dropped (this should not occur with the bundled FASTA but guards against
+    corrupt downloads).
+    """
+    logger.info(f"[{_SCRIPT}] Fetching file list from figshare ...")
+    files = get_figshare_files(BERNETT_PPI_ARTICLE_ID)
+
+    logger.info(f"[{_SCRIPT}] Downloading sequence FASTA ...")
+    with urllib.request.urlopen(
+        files["human_swissprot_oneliner.fasta"]
+    ) as response:
+        fasta_bytes = response.read()
+    logger.info(
+        f"[{_SCRIPT}] Downloaded {len(fasta_bytes) / 1_000_000:.1f} MB"
+    )
+    seqs = parse_fasta_oneliner(fasta_bytes)
+    logger.info(f"[{_SCRIPT}] Parsed {len(seqs):,} sequences from FASTA")
+
+    dest = dest.rstrip("/")
+    for split_name, intra in BERNETT_PPI_SPLITS.items():
+        rows = []
+        missing = 0
+        for label, target in [("pos", 1), ("neg", 0)]:
+            filename = f"{intra}_{label}_rr.txt"
+            logger.info(
+                f"[{_SCRIPT}] Downloading {filename} ..."
+            )
+            with urllib.request.urlopen(files[filename]) as response:
+                text = response.read().decode("utf-8")
+            for line in text.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                id_a, id_b = line.split()
+                seq_a = seqs.get(id_a)
+                seq_b = seqs.get(id_b)
+                if seq_a is None or seq_b is None:
+                    missing += 1
+                    continue
+                rows.append(
+                    {
+                        "sequence_a": seq_a,
+                        "sequence_b": seq_b,
+                        "target": target,
+                    }
+                )
+        if missing:
+            logger.warning(
+                f"[{_SCRIPT}] {missing} pairs dropped "
+                f"(sequence not found in FASTA)"
+            )
+        df = pd.DataFrame(rows)
+        out_path = f"{dest}/{split_name}.csv"
+        write_df(df, out_path)
+        logger.info(
+            f"[{_SCRIPT}] Saved {split_name}.csv"
+            f" ({len(df):,} rows) to {out_path}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download protein benchmark datasets."
@@ -205,7 +325,9 @@ def main():
     parser.add_argument(
         "--task",
         required=True,
-        choices=list(TAPE_TASKS.keys()) + list(FLIP2_TASKS.keys()),
+        choices=list(TAPE_TASKS.keys()) + list(FLIP2_TASKS.keys()) + [
+            "bernett_ppi"
+        ],
         help="Task to download",
     )
     parser.add_argument(
@@ -218,11 +340,16 @@ def main():
     if args.task in TAPE_TASKS:
         dest = args.dest if args.dest is not None else f".data/tape/{args.task}"
         onboard_tape_task(args.task, dest)
-    else:
+    elif args.task in FLIP2_TASKS:
         dest = (
             args.dest if args.dest is not None else f".data/flip2/{args.task}"
         )
         onboard_flip2_task(args.task, dest)
+    else:  # bernett_ppi
+        dest = (
+            args.dest if args.dest is not None else ".data/bernett_ppi"
+        )
+        onboard_bernett_ppi(dest)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,23 @@ import json
 import os
 
 import numpy as np
+import pytest
 
 from protein_benchmark_models.models.ridge_regressor import RidgeRegressor
 from protein_benchmark_models.models.mlp_regressor import MLPRegressor
 from protein_benchmark_models.models.cnn_regressor import CNNRegressor
-from tests.conftest import SEQ_LEN, SEQUENCES, VOCAB_SIZE, onehot_X, token_X
+from protein_benchmark_models.models.siamese_mlp_classifier import (
+    SiameseMLPClassifier,
+)
+from tests.conftest import (
+    SEQ_LEN,
+    SEQUENCES,
+    VOCAB_SIZE,
+    BINARY_TARGETS,
+    onehot_X,
+    token_X,
+    paired_onehot_X,
+)
 
 N = len(SEQUENCES)  # 8
 
@@ -142,3 +154,66 @@ class TestCNNRegressor:
         assert model.config["seq_length"] == SEQ_LEN
         assert model.config["output_dim"] == 1
         assert model.config["accelerator"] == "auto"
+
+
+class TestSiameseMLPClassifier:
+    # encoder: SEQ_LEN*VOCAB_SIZE → 16; head: 32 → 1
+    ENCODER_DIMS = [SEQ_LEN * VOCAB_SIZE, 16]
+    HEAD_DIMS = [32, 1]
+
+    def test_lifecycle(self, paired_onehot_data, tmp_path):
+        model = SiameseMLPClassifier(
+            encoder_dims=self.ENCODER_DIMS,
+            head_dims=self.HEAD_DIMS,
+        )
+        model.train(
+            train_data=paired_onehot_data,
+            val_data=paired_onehot_data,
+            tracking=False,
+            model_path=str(tmp_path / "model"),
+            max_epochs=3,
+        )
+
+        assert os.path.isdir(tmp_path / "model_final")
+        assert os.path.exists(tmp_path / "model_final" / "config.json")
+        assert os.path.exists(tmp_path / "model_final" / "model.pt")
+
+        with open(tmp_path / "model_final" / "config.json") as f:
+            config = json.load(f)
+        assert config["model_name"] == "siamese_mlp_classifier"
+        assert config["model_params"]["encoder_dims"] == self.ENCODER_DIMS
+        assert config["model_params"]["head_dims"] == self.HEAD_DIMS
+
+        X_a, X_b = paired_onehot_X(paired_onehot_data)
+        preds = model.predict(X_a, X_b)
+        assert preds.shape == (N,)
+        assert ((preds >= 0.0) & (preds <= 1.0)).all()
+
+        model2 = SiameseMLPClassifier.load(str(tmp_path / "model_final"))
+        preds2 = model2.predict(X_a, X_b)
+        np.testing.assert_array_equal(preds, preds2)
+
+    def test_config(self):
+        model = SiameseMLPClassifier(
+            encoder_dims=self.ENCODER_DIMS,
+            head_dims=self.HEAD_DIMS,
+            hidden_activation="LeakyReLU",
+        )
+        assert model.config["encoder_dims"] == self.ENCODER_DIMS
+        assert model.config["head_dims"] == self.HEAD_DIMS
+        assert model.config["hidden_activation"] == "LeakyReLU"
+        assert model.config["accelerator"] == "auto"
+
+    def test_invalid_head_dims_raises(self):
+        with pytest.raises(ValueError, match="head_dims\\[0\\]"):
+            SiameseMLPClassifier(
+                encoder_dims=self.ENCODER_DIMS,
+                head_dims=[99, 1],  # should be 32
+            )
+
+    def test_invalid_head_output_raises(self):
+        with pytest.raises(ValueError, match="head_dims\\[-1\\]"):
+            SiameseMLPClassifier(
+                encoder_dims=self.ENCODER_DIMS,
+                head_dims=[32, 2],  # should be 1
+            )

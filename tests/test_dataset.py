@@ -10,8 +10,19 @@ Covers:
 import torch
 import pytest
 
-from protein_benchmark_models.data import AA_VOCAB
-from tests.conftest import SEQ_LEN, SEQUENCES, TARGETS, VOCAB_SIZE
+from protein_benchmark_models.data import (
+    AA_VOCAB,
+    PairedSequenceDataset,
+    PairedTokenizedSequenceDataset,
+    PairedOneHotSequenceDataset,
+)
+from tests.conftest import (
+    SEQ_LEN,
+    SEQUENCES,
+    TARGETS,
+    BINARY_TARGETS,
+    VOCAB_SIZE,
+)
 
 
 class TestSequenceDataset:
@@ -109,3 +120,116 @@ class TestOneHotSequenceDataset:
         one_hots = onehot_data[0]["one_hots"]
         assert one_hots[0, AA_VOCAB["A"]].item() == 1.0
         assert one_hots[0].sum().item() == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Paired dataset tests
+# ---------------------------------------------------------------------------
+
+SEQS_A = SEQUENCES
+SEQS_B = SEQUENCES[::-1]
+
+
+class TestPairedSequenceDataset:
+    def setup_method(self):
+        self.ds = PairedSequenceDataset(
+            sequences_a=SEQS_A,
+            sequences_b=SEQS_B,
+            targets=BINARY_TARGETS,
+        )
+
+    def test_len(self):
+        assert len(self.ds) == len(SEQS_A)
+
+    def test_item_keys(self):
+        item = self.ds[0]
+        assert set(item.keys()) == {"sequence_a", "sequence_b", "target"}
+
+    def test_item_types(self):
+        item = self.ds[0]
+        assert isinstance(item["sequence_a"], str)
+        assert isinstance(item["sequence_b"], str)
+        assert item["target"].dtype == torch.float32
+        assert item["target"].shape == ()
+
+    def test_values(self):
+        for i in range(len(SEQS_A)):
+            item = self.ds[i]
+            assert item["sequence_a"] == SEQS_A[i]
+            assert item["sequence_b"] == SEQS_B[i]
+            assert item["target"].item() == pytest.approx(BINARY_TARGETS[i])
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            PairedSequenceDataset(
+                sequences_a=SEQS_A,
+                sequences_b=SEQS_B[:-1],
+                targets=BINARY_TARGETS,
+            )
+
+
+class TestPairedTokenizedSequenceDataset:
+    def setup_method(self):
+        self.ds = PairedTokenizedSequenceDataset(
+            sequences_a=SEQS_A,
+            sequences_b=SEQS_B,
+            targets=BINARY_TARGETS,
+            seq_len=SEQ_LEN,
+        )
+
+    def test_len(self):
+        assert len(self.ds) == len(SEQS_A)
+
+    def test_item_keys(self):
+        assert set(self.ds[0].keys()) == {"tokens_a", "tokens_b", "target"}
+
+    def test_shapes(self):
+        item = self.ds[0]
+        assert item["tokens_a"].shape == (SEQ_LEN,)
+        assert item["tokens_b"].shape == (SEQ_LEN,)
+
+    def test_dtypes(self):
+        item = self.ds[0]
+        assert item["tokens_a"].dtype == torch.long
+        assert item["tokens_b"].dtype == torch.long
+        assert item["target"].dtype == torch.float32
+
+
+class TestPairedOneHotSequenceDataset:
+    def setup_method(self):
+        self.ds = PairedOneHotSequenceDataset(
+            sequences_a=SEQS_A,
+            sequences_b=SEQS_B,
+            targets=BINARY_TARGETS,
+            seq_len=SEQ_LEN,
+        )
+
+    def test_len(self):
+        assert len(self.ds) == len(SEQS_A)
+
+    def test_item_keys(self):
+        assert set(self.ds[0].keys()) == {
+            "one_hots_a", "one_hots_b", "target"
+        }
+
+    def test_shapes(self):
+        item = self.ds[0]
+        assert item["one_hots_a"].shape == (SEQ_LEN, VOCAB_SIZE)
+        assert item["one_hots_b"].shape == (SEQ_LEN, VOCAB_SIZE)
+
+    def test_dtypes(self):
+        item = self.ds[0]
+        assert item["one_hots_a"].dtype == torch.float32
+        assert item["one_hots_b"].dtype == torch.float32
+        assert item["target"].dtype == torch.float32
+
+    def test_valid_one_hots(self):
+        item = self.ds[0]
+        for key in ("one_hots_a", "one_hots_b"):
+            assert (item[key].sum(dim=-1) == 1.0).all()
+
+    def test_sequences_are_independent(self):
+        # sequences_a and sequences_b are different (reversed), so encodings
+        # should differ for most samples.
+        item = self.ds[0]
+        assert not torch.equal(item["one_hots_a"], item["one_hots_b"])

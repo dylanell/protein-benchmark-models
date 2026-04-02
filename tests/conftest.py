@@ -8,6 +8,7 @@ from protein_benchmark_models.data import (
     SequenceDataset,
     OneHotSequenceDataset,
     TokenizedSequenceDataset,
+    PairedOneHotSequenceDataset,
 )
 
 # Small fixed sequences for fast, deterministic tests.
@@ -42,6 +43,22 @@ def token_X(dataset):
     return np.stack([dataset[i]["tokens"].numpy() for i in range(len(dataset))])
 
 
+# Binary targets for paired classification fixtures (alternating 0/1).
+BINARY_TARGETS = [float(i % 2) for i in range(len(SEQUENCES))]
+
+
+def paired_onehot_X(dataset):
+    """Return (X_a, X_b) flattened one-hot arrays from a
+    PairedOneHotSequenceDataset."""
+    X_a = np.stack(
+        [dataset[i]["one_hots_a"].numpy().flatten() for i in range(len(dataset))]
+    )
+    X_b = np.stack(
+        [dataset[i]["one_hots_b"].numpy().flatten() for i in range(len(dataset))]
+    )
+    return X_a, X_b
+
+
 @pytest.fixture
 def sequence_data():
     return SequenceDataset(sequences=SEQUENCES, targets=TARGETS)
@@ -58,4 +75,14 @@ def onehot_data():
 def tokenized_data():
     return TokenizedSequenceDataset(
         sequences=SEQUENCES, targets=TARGETS, seq_len=SEQ_LEN
+    )
+
+
+@pytest.fixture
+def paired_onehot_data():
+    return PairedOneHotSequenceDataset(
+        sequences_a=SEQUENCES,
+        sequences_b=SEQUENCES[::-1],
+        targets=BINARY_TARGETS,
+        seq_len=SEQ_LEN,
     )
