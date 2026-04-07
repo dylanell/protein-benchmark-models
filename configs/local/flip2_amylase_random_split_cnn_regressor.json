@@ -3,7 +3,7 @@
     "data": {
         "train_path": ".data/flip2/amylase/random_split/train.csv",
         "valid_path": ".data/flip2/amylase/random_split/valid.csv",
-        "dataset_type": "tokenized"
+        "task_type": "tokenized"
     },
     "model": {
         "name": "cnn_regressor",

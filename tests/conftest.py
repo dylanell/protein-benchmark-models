@@ -9,6 +9,7 @@ from protein_benchmark_models.data import (
     OneHotSequenceDataset,
     TokenizedSequenceDataset,
     PairedOneHotSequenceDataset,
+    PairedTokenizedSequenceDataset,
 )
 
 # Small fixed sequences for fast, deterministic tests.
@@ -59,6 +60,18 @@ def paired_onehot_X(dataset):
     return X_a, X_b
 
 
+def paired_token_X(dataset):
+    """Return (X_a, X_b) token index arrays from a
+    PairedTokenizedSequenceDataset."""
+    X_a = np.stack(
+        [dataset[i]["tokens_a"].numpy() for i in range(len(dataset))]
+    )
+    X_b = np.stack(
+        [dataset[i]["tokens_b"].numpy() for i in range(len(dataset))]
+    )
+    return X_a, X_b
+
+
 @pytest.fixture
 def sequence_data():
     return SequenceDataset(sequences=SEQUENCES, targets=TARGETS)
@@ -81,6 +94,16 @@ def tokenized_data():
 @pytest.fixture
 def paired_onehot_data():
     return PairedOneHotSequenceDataset(
+        sequences_a=SEQUENCES,
+        sequences_b=SEQUENCES[::-1],
+        targets=BINARY_TARGETS,
+        seq_len=SEQ_LEN,
+    )
+
+
+@pytest.fixture
+def paired_tokenized_data():
+    return PairedTokenizedSequenceDataset(
         sequences_a=SEQUENCES,
         sequences_b=SEQUENCES[::-1],
         targets=BINARY_TARGETS,

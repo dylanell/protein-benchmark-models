@@ -1,23 +1,23 @@
 {
     "seed": 42,
     "data": {
-        "train_path": ".data/bernett_ppi/train.csv",
-        "valid_path": ".data/bernett_ppi/valid.csv",
+        "train_path": "s3://data/bernett_ppi/train.csv",
+        "valid_path": "s3://data/bernett_ppi/valid.csv",
         "task_type": "paired_onehot",
-        "seq_len": 512
+        "seq_len": 4096
     },
     "model": {
         "name": "siamese_mlp_classifier",
         "params": {
             "encoder_dims": [
+                512,
                 128
             ],
             "head_dims": [
                 256,
-                64,
                 1
             ],
-            "hidden_activation": "ReLU",
+            "hidden_activation": "LeakyReLU",
             "output_activation": "Identity",
             "use_bias": true,
             "norm": "layer"
@@ -26,10 +26,10 @@
     "training": {
         "experiment_name": "bernett_ppi_classification",
         "run_name": null,
-        "model_path": ".models/bernett_ppi_siamese_mlp_classifier",
-        "lr": 0.0001,
+        "model_path": "s3://models/bernett_ppi_siamese_mlp_classifier",
+        "lr": 0.001,
         "weight_decay": 0.01,
-        "max_epochs": 5,
+        "max_epochs": 1000,
         "batch_size": 256,
         "val_frequency": 1,
         "patience": 25,

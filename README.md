@@ -442,7 +442,7 @@ Run any training config on a GPU without managing infrastructure. Data is read f
 > ```
 
 ```bash
-uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
+uv run modal run --detach modal/train_modal.py --config configs/remote/tape_fluorescence_mlp_regressor.json
 ```
 
 See [modal/README.md](modal/README.md) for Modal-specific prerequisites and setup.

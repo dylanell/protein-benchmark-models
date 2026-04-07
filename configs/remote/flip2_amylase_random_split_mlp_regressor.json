@@ -3,7 +3,7 @@
     "data": {
         "train_path": "s3://data/flip2/amylase/random_split/train.csv",
         "valid_path": "s3://data/flip2/amylase/random_split/valid.csv",
-        "dataset_type": "one_hot"
+        "task_type": "one_hot"
     },
     "model": {
         "name": "mlp_regressor",

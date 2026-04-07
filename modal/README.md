@@ -40,17 +40,27 @@ Or create it in the Modal dashboard under Secrets.
 
 ## Usage
 
+Always use `--detach` to avoid heartbeat failures if your terminal disconnects or your
+machine sleeps during a long run:
+
 ```bash
 # Default config (tape fluorescence MLP)
-uv run modal run modal/train_modal.py
+uv run modal run --detach modal/train_modal.py
 
 # Specify any remote config
-uv run modal run modal/train_modal.py --config configs/remote/tape_fluorescence_cnn_regressor.json
-uv run modal run modal/train_modal.py --config configs/remote/flip2_amylase_random_split_mlp_regressor.json
+uv run modal run --detach modal/train_modal.py --config configs/remote/tape_fluorescence_cnn_regressor.json
+uv run modal run --detach modal/train_modal.py --config configs/remote/flip2_amylase_random_split_mlp_regressor.json
 ```
 
-Logs stream back to your terminal in real time. The MLflow run appears in the remote
-tracking server at `MLFLOW_TRACKING_URI` as soon as training starts.
+The run URL is printed immediately and the job continues on Modal's infrastructure
+regardless of local connectivity. Monitor logs via the URL or:
+
+```bash
+modal app logs <app-id>
+```
+
+The MLflow run appears in the remote tracking server at `MLFLOW_TRACKING_URI` as soon
+as training starts.
 
 ## How It Works
 

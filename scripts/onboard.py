@@ -19,6 +19,7 @@ Output structure for FLIP2:
 
 Bernett PPI task (gold-standard leakage-free human PPI binary classification):
     uv run python scripts/onboard.py --task bernett_ppi
+    uv run python scripts/onboard.py --task bernett_ppi --dest s3://data/bernett_ppi/
 
 Output structure for bernett_ppi:
     .data/bernett_ppi/train.csv  — columns: sequence_a, sequence_b, target
@@ -270,9 +271,7 @@ def onboard_bernett_ppi(dest: str) -> None:
         files["human_swissprot_oneliner.fasta"]
     ) as response:
         fasta_bytes = response.read()
-    logger.info(
-        f"[{_SCRIPT}] Downloaded {len(fasta_bytes) / 1_000_000:.1f} MB"
-    )
+    logger.info(f"[{_SCRIPT}] Downloaded {len(fasta_bytes) / 1_000_000:.1f} MB")
     seqs = parse_fasta_oneliner(fasta_bytes)
     logger.info(f"[{_SCRIPT}] Parsed {len(seqs):,} sequences from FASTA")
 
@@ -282,9 +281,7 @@ def onboard_bernett_ppi(dest: str) -> None:
         missing = 0
         for label, target in [("pos", 1), ("neg", 0)]:
             filename = f"{intra}_{label}_rr.txt"
-            logger.info(
-                f"[{_SCRIPT}] Downloading {filename} ..."
-            )
+            logger.info(f"[{_SCRIPT}] Downloading {filename} ...")
             with urllib.request.urlopen(files[filename]) as response:
                 text = response.read().decode("utf-8")
             for line in text.strip().splitlines():
@@ -325,9 +322,9 @@ def main():
     parser.add_argument(
         "--task",
         required=True,
-        choices=list(TAPE_TASKS.keys()) + list(FLIP2_TASKS.keys()) + [
-            "bernett_ppi"
-        ],
+        choices=list(TAPE_TASKS.keys())
+        + list(FLIP2_TASKS.keys())
+        + ["bernett_ppi"],
         help="Task to download",
     )
     parser.add_argument(
@@ -346,9 +343,7 @@ def main():
         )
         onboard_flip2_task(args.task, dest)
     else:  # bernett_ppi
-        dest = (
-            args.dest if args.dest is not None else ".data/bernett_ppi"
-        )
+        dest = args.dest if args.dest is not None else ".data/bernett_ppi"
         onboard_bernett_ppi(dest)
 
 

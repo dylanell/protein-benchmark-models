@@ -1,0 +1,77 @@
+{
+    "seed": 42,
+    "data": {
+        "train_path": "s3://data/bernett_ppi/train.csv",
+        "valid_path": "s3://data/bernett_ppi/valid.csv",
+        "task_type": "paired_tokenized",
+        "seq_len": 4096
+    },
+    "model": {
+        "name": "siamese_cnn_classifier",
+        "params": {
+            "embed_dims": [
+                22,
+                64
+            ],
+            "kernel_spec": [
+                [
+                    9,
+                    64,
+                    3
+                ],
+                [
+                    7,
+                    128,
+                    3
+                ],
+                [
+                    5,
+                    256,
+                    2
+                ],
+                [
+                    3,
+                    512,
+                    2
+                ],
+                [
+                    3,
+                    1024,
+                    2
+                ],
+                [
+                    3,
+                    1024,
+                    2
+                ],
+                [
+                    3,
+                    1024,
+                    2
+                ]
+            ],
+            "output_dim": 1024,
+            "head_dims": [
+                2048,
+                512,
+                1
+            ],
+            "hidden_activation": "LeakyReLU",
+            "output_activation": "Identity",
+            "use_bias": true,
+            "norm": "batch"
+        }
+    },
+    "training": {
+        "experiment_name": "bernett_ppi_classification",
+        "run_name": null,
+        "model_path": "s3://models/bernett_ppi_siamese_cnn_classifier_4096",
+        "lr": 0.0001,
+        "weight_decay": 0.01,
+        "max_epochs": 1000,
+        "batch_size": 64,
+        "val_frequency": 1,
+        "patience": 25,
+        "tracking": true
+    }
+}

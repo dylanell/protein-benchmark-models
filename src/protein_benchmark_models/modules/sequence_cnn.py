@@ -4,7 +4,7 @@ Each conv layer slides a k-mer kernel along the sequence dimension; the
 out_channels of each layer become the token embedding dimension fed into
 the next layer.
 
-Tensor shapes through the network:
+Tensor shapes through the network (output_dim is not None):
   embedding : [B, seq_len, embed_dim]
   transpose  : [B, embed_dim, seq_len]   ← Conv1d expects (B, C, L)
   conv_1     : [B, out_channels_1, seq_len_1]
@@ -12,6 +12,9 @@ Tensor shapes through the network:
   ...
   flatten    : [B, out_channels_last * seq_len_last]
   linear     : [B, output_dim]
+
+When output_dim=None the flatten and linear steps are skipped and the raw
+CNN feature map [B, out_channels_last, final_seq_len] is returned.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ class SequenceCNN(nn.Module):
         embed_dims: list[int],
         kernel_spec: list[list[int]],
         seq_length: int,
-        output_dim: int,
+        output_dim: int | None,
         padding_idx: int = 0,
         hidden_activation: str = "ReLU",
         output_activation: str = "Identity",
@@ -47,7 +50,9 @@ class SequenceCNN(nn.Module):
                 for the next layer.
             seq_length: Input sequence length. Used to compute the flattened
                 size of the CNN output.
-            output_dim: Number of output units in the linear head.
+            output_dim: Number of output units in the linear head. If None,
+                the flatten and linear steps are skipped and the raw CNN
+                feature map [B, out_channels_last, final_seq_len] is returned.
             padding_idx: Token index treated as padding (embedding zeroed out).
             hidden_activation: nn activation applied after each hidden layer.
             output_activation: nn activation name applied after the final conv.
@@ -94,8 +99,11 @@ class SequenceCNN(nn.Module):
 
         self.cnn = nn.Sequential(*cnn_layers)
 
-        cnn_output_dim = in_channels * current_seq_len
-        self.linear = nn.Linear(cnn_output_dim, output_dim, bias=use_bias)
+        if output_dim is not None:
+            cnn_output_dim = in_channels * current_seq_len
+            self.linear = nn.Linear(cnn_output_dim, output_dim, bias=use_bias)
+        else:
+            self.linear = None
 
     def forward(self, x):
         x = self.embedding(x)  # [B, seq_len, embed_dim]
@@ -103,6 +111,8 @@ class SequenceCNN(nn.Module):
             1, 2
         )  # [B, embed_dim, seq_len] — Conv1d expects (B, C, L)
         x = self.cnn(x)  # [B, out_channels_last, final_seq_len]
+        if self.linear is None:
+            return x
         x = x.flatten(start_dim=1)  # [B, cnn_output_dim]
         x = self.linear(x)  # [B, output_dim]
         return x

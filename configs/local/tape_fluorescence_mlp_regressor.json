@@ -3,7 +3,7 @@
     "data": {
         "train_path": ".data/tape/fluorescence/train.csv",
         "valid_path": ".data/tape/fluorescence/valid.csv",
-        "dataset_type": "one_hot"
+        "task_type": "one_hot"
     },
     "model": {
         "name": "mlp_regressor",

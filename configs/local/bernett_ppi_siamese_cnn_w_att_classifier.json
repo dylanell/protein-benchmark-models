@@ -1,12 +1,13 @@
 {
     "seed": 42,
     "data": {
-        "train_path": ".data/tape/fluorescence/train.csv",
-        "valid_path": ".data/tape/fluorescence/valid.csv",
-        "task_type": "tokenized"
+        "train_path": ".data/bernett_ppi/train.csv",
+        "valid_path": ".data/bernett_ppi/valid.csv",
+        "task_type": "paired_tokenized",
+        "seq_len": 4096
     },
     "model": {
-        "name": "cnn_regressor",
+        "name": "siamese_cnn_w_att_classifier",
         "params": {
             "embed_dims": [
                 22,
@@ -29,22 +30,29 @@
                     2
                 ]
             ],
-            "output_dim": 1,
-            "hidden_activation": "LeakyReLU",
+            "num_attention_heads": 8,
+            "head_dims": [
+                256,
+                64,
+                1
+            ],
+            "hidden_activation": "ReLU",
             "output_activation": "Identity",
             "use_bias": true,
-            "norm": "layer"
+            "norm": "batch",
+            "attention_dropout": 0.1
         }
     },
     "training": {
-        "experiment_name": "tape_fluorescence_regression",
+        "experiment_name": "bernett_ppi_classification",
         "run_name": null,
-        "model_path": ".models/tape_fluorescence_cnn_regressor",
+        "model_path": ".models/bernett_ppi_siamese_cnn_w_att_classifier",
         "lr": 0.0001,
         "weight_decay": 0.01,
-        "max_epochs": 5,
+        "max_epochs": 50,
         "batch_size": 256,
-        "patience": 25,
+        "val_frequency": 1,
+        "patience": 10,
         "tracking": true
     }
 }
